@@ -127,17 +127,9 @@ async def seed_catalog():
         except Exception as e:
             log.error(f"Failed to fetch skins master: {e}")
 
-    # Re-seed catalog listings if using old v1 seed OR none exist
-    v2_count = await db.listings.count_documents({"is_catalog": True, "catalog_version": 2})
-    if v2_count == 0:
-        # Remove old catalog and re-seed with real skins
-        await db.listings.delete_many({"is_catalog": True})
-        master_docs = await db.skins_master.find({}, {"_id": 0}).to_list(length=None)
-        if master_docs:
-            seed = build_seed_listings(master_docs, target_count=200)
-            if seed:
-                await db.listings.insert_many(seed)
-                log.info(f"Seeded {len(seed)} real CS2 skin listings")
+    # No longer seed system listings — marketplace = full master catalog.
+    # Remove any legacy seeded listings so /marketplace/listings only shows real user listings.
+    await db.listings.delete_many({"is_catalog": True})
 
 
 # ---------------- Health ----------------
@@ -220,6 +212,44 @@ async def skins_search(q: str = "", rarity: str = "", limit: int = 40):
         query["rarity"] = rarity
     items = await db.skins_master.find(query, {"_id": 0}).limit(limit).to_list(limit)
     return {"items": items}
+
+
+@api.get("/skins/all")
+async def skins_all(
+    search: str = "",
+    rarity: Optional[str] = None,
+    weapon_type: Optional[str] = None,
+    sort: str = "name_asc",
+    page: int = 1,
+    page_size: int = 60,
+):
+    """Return the full CS2 master catalog with computed reference prices.
+    This is the main 'Marketplace' — a pricing catalog of every CS2 skin.
+    """
+    from skins_catalog import PRICE_RANGES
+    q = {}
+    if search: q["name"] = {"$regex": search, "$options": "i"}
+    if rarity: q["rarity"] = rarity
+    if weapon_type: q["type"] = weapon_type
+
+    sort_map = {
+        "name_asc": [("name", 1)],
+        "name_desc": [("name", -1)],
+        "rarity_desc": [("rarity", -1)],
+    }
+    total = await db.skins_master.count_documents(q)
+    skip = max(0, (page - 1) * page_size)
+    docs = await db.skins_master.find(q, {"_id": 0}).sort(sort_map.get(sort, sort_map["name_asc"])).skip(skip).limit(page_size).to_list(page_size)
+
+    # Attach reference price (midpoint of rarity band) and live-listing counts
+    for d in docs:
+        lo, hi = PRICE_RANGES.get(d.get("rarity"), (1.0, 10.0))
+        d["reference_price_usd"] = round((lo + hi) / 2, 2)
+        d["price_range_usd"] = {"low": lo, "high": hi}
+        d["live_listings"] = await db.listings.count_documents({
+            "skin_name": d.get("name"), "status": "active"
+        })
+    return {"items": docs, "total": total, "page": page, "page_size": page_size}
 
 
 # ---------------- Marketplace Listings ----------------

@@ -8,6 +8,7 @@ import { CurrencyProvider } from "@/context/CurrencyContext";
 import Navbar from "@/components/Navbar";
 import LandingPage from "@/pages/LandingPage";
 import MarketplacePage from "@/pages/MarketplacePage";
+import LiveListingsPage from "@/pages/LiveListingsPage";
 import InventoryPage from "@/pages/InventoryPage";
 import OrdersPage from "@/pages/OrdersPage";
 import CheckoutSuccess from "@/pages/CheckoutSuccess";
@@ -25,6 +26,7 @@ function App() {
               <Routes>
                 <Route path="/" element={<LandingPage />} />
                 <Route path="/market" element={<MarketplacePage />} />
+                <Route path="/live" element={<LiveListingsPage />} />
                 <Route path="/inventory" element={<InventoryPage />} />
                 <Route path="/orders" element={<OrdersPage />} />
                 <Route path="/auth/callback" element={<SteamCallback />} />
