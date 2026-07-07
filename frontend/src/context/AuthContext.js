@@ -29,9 +29,9 @@ export function AuthProvider({ children }) {
     refresh();
   }, []);
 
-  const login = (token) => {
+  const login = async (token) => {
     localStorage.setItem("cs2_token", token);
-    refresh();
+    await refresh();
   };
 
   const logout = () => {

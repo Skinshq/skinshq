@@ -1,11 +1,21 @@
-import React from "react";
-import { Link } from "react-router-dom";
+import React, { useEffect } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { FaSteam } from "react-icons/fa";
 import { ShieldCheck, DollarSign, Repeat, ArrowRight } from "lucide-react";
+import { toast } from "sonner";
 import { useAuth } from "../context/AuthContext";
 
 export default function LandingPage() {
   const { user, loginWithSteam } = useAuth();
+  const [params, setParams] = useSearchParams();
+
+  useEffect(() => {
+    if (params.get("auth") === "failed") {
+      toast.error("Steam sign-in was not completed. Please try again.");
+      params.delete("auth");
+      setParams(params, { replace: true });
+    }
+  }, []);
 
   return (
     <div className="min-h-screen">
