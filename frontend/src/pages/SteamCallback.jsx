@@ -20,6 +20,12 @@ export default function SteamCallback() {
       try {
         await login(token);
         toast.success("Signed in with Steam");
+        // If this page was opened as a popup from the iframe, close and let parent refresh
+        if (window.opener && !window.opener.closed) {
+          try { window.opener.focus(); } catch (_) {}
+          window.close();
+          return;
+        }
         navigate("/inventory", { replace: true });
       } catch {
         toast.error("Failed to complete Steam sign-in");
