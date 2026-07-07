@@ -6,7 +6,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 
 load_dotenv("/app/backend/.env")
-BASE = "https://cs-inventory-swap.preview.emergentagent.com"
+BASE = "https://live-market-feed-4.preview.emergentagent.com"
 API = f"{BASE}/api"
 JWT_SECRET = os.environ["JWT_SECRET"]
 MONGO_URL = os.environ["MONGO_URL"]
