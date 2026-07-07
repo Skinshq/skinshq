@@ -114,20 +114,28 @@ async def fetch_cs2_inventory(steam_id: str) -> list[dict]:
 
 
 def demo_inventory():
-    """Return a demo inventory when Steam inventory is private/unavailable."""
-    from skins_catalog import CATALOG, WEARS, KNIFE_IMG, RIFLE_IMG
+    """Return a demo inventory when Steam inventory is private/unavailable.
+    Uses the real skins fetched from ByMykel API stored in Mongo.
+    """
+    from skins_catalog import WEARS
     import random
+    # Import here to avoid circular dependency
+    from pymongo import MongoClient
+    import os
+    client = MongoClient(os.environ["MONGO_URL"])
+    coll = client[os.environ["DB_NAME"]].skins_master
+    docs = list(coll.aggregate([{"$sample": {"size": 12}}]))
+    client.close()
     demo = []
-    sample = random.sample(CATALOG, min(8, len(CATALOG)))
-    for i, s in enumerate(sample):
+    for i, s in enumerate(docs):
         demo.append({
             "asset_id": f"demo-{i}",
             "class_id": f"cls-{i}",
             "instance_id": "0",
-            "market_name": s["name"],
+            "market_name": s.get("name"),
             "wear": random.choice(WEARS),
-            "rarity": s["rarity"],
-            "image": s["image"],
+            "rarity": s.get("rarity"),
+            "image": s.get("image"),
             "tradable": True,
             "is_demo": True,
         })

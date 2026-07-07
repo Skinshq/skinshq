@@ -1,4 +1,12 @@
-"""Seed catalog of popular CS2 skins for the marketplace."""
+"""CS2 skins catalog powered by the free ByMykel/CSGO-API.
+2000+ real skins with authentic images from Steam's CDN.
+"""
+import httpx
+import random
+import uuid
+from datetime import datetime, timezone
+
+SKINS_API_URL = "https://cdn.jsdelivr.net/gh/ByMykel/CSGO-API@main/public/api/en/skins.json"
 
 RARITIES = {
     "consumer": "#B0C3D9",
@@ -10,76 +18,127 @@ RARITIES = {
     "contraband": "#E4AE39",
 }
 
-KNIFE_IMG = "https://images.unsplash.com/photo-1589728473894-4fb97b4dbb88?w=400"
-KNIFE_IMG_2 = "https://images.unsplash.com/photo-1588597574944-5e581eeef359?w=400"
-RIFLE_IMG = "https://images.pexels.com/photos/8390978/pexels-photo-8390978.jpeg?w=400"
-RIFLE_IMG_2 = "https://images.unsplash.com/photo-1482649671545-bc53dcf1ad7c?w=400"
+# Map ByMykel rarity IDs to our internal rarity keys
+RARITY_MAP = {
+    "rarity_common_weapon": "consumer",
+    "rarity_uncommon_weapon": "industrial",
+    "rarity_rare_weapon": "milspec",
+    "rarity_mythical_weapon": "restricted",
+    "rarity_legendary_weapon": "classified",
+    "rarity_ancient_weapon": "covert",
+    "rarity_contraband_weapon": "contraband",
+    "rarity_ancient": "contraband",  # Knives & gloves
+    "rarity_immortal": "contraband",
+}
+
+# Base price ranges by rarity (USD) — used when generating listings
+PRICE_RANGES = {
+    "consumer": (0.05, 0.60),
+    "industrial": (0.15, 2.50),
+    "milspec": (0.80, 15.0),
+    "restricted": (5.0, 80.0),
+    "classified": (25.0, 400.0),
+    "covert": (60.0, 3500.0),
+    "contraband": (200.0, 12000.0),
+}
 
 WEARS = ["Factory New", "Minimal Wear", "Field-Tested", "Well-Worn", "Battle-Scarred"]
-
-CATALOG = [
-    # Covert (Red)
-    {"name": "AWP | Dragon Lore", "weapon": "AWP", "type": "Sniper Rifle", "rarity": "covert", "base_price": 12500.00, "image": RIFLE_IMG},
-    {"name": "AK-47 | Fire Serpent", "weapon": "AK-47", "type": "Rifle", "rarity": "covert", "base_price": 2800.00, "image": RIFLE_IMG_2},
-    {"name": "M4A4 | Howl", "weapon": "M4A4", "type": "Rifle", "rarity": "contraband", "base_price": 5400.00, "image": RIFLE_IMG},
-    {"name": "AK-47 | Wild Lotus", "weapon": "AK-47", "type": "Rifle", "rarity": "covert", "base_price": 6800.00, "image": RIFLE_IMG_2},
-    {"name": "AWP | Gungnir", "weapon": "AWP", "type": "Sniper Rifle", "rarity": "covert", "base_price": 9200.00, "image": RIFLE_IMG},
-    # Knives (Gold)
-    {"name": "★ Karambit | Doppler", "weapon": "Karambit", "type": "Knife", "rarity": "contraband", "base_price": 1850.00, "image": KNIFE_IMG},
-    {"name": "★ Butterfly Knife | Fade", "weapon": "Butterfly Knife", "type": "Knife", "rarity": "contraband", "base_price": 2200.00, "image": KNIFE_IMG_2},
-    {"name": "★ M9 Bayonet | Marble Fade", "weapon": "M9 Bayonet", "type": "Knife", "rarity": "contraband", "base_price": 1650.00, "image": KNIFE_IMG},
-    {"name": "★ Bayonet | Tiger Tooth", "weapon": "Bayonet", "type": "Knife", "rarity": "contraband", "base_price": 950.00, "image": KNIFE_IMG_2},
-    # Classified (Pink)
-    {"name": "AK-47 | Vulcan", "weapon": "AK-47", "type": "Rifle", "rarity": "classified", "base_price": 380.00, "image": RIFLE_IMG_2},
-    {"name": "M4A1-S | Hyper Beast", "weapon": "M4A1-S", "type": "Rifle", "rarity": "classified", "base_price": 42.00, "image": RIFLE_IMG},
-    {"name": "USP-S | Kill Confirmed", "weapon": "USP-S", "type": "Pistol", "rarity": "classified", "base_price": 95.00, "image": RIFLE_IMG},
-    {"name": "AWP | Neo-Noir", "weapon": "AWP", "type": "Sniper Rifle", "rarity": "classified", "base_price": 55.00, "image": RIFLE_IMG_2},
-    # Restricted (Purple)
-    {"name": "AK-47 | Redline", "weapon": "AK-47", "type": "Rifle", "rarity": "restricted", "base_price": 32.00, "image": RIFLE_IMG_2},
-    {"name": "M4A4 | Desolate Space", "weapon": "M4A4", "type": "Rifle", "rarity": "restricted", "base_price": 28.00, "image": RIFLE_IMG},
-    {"name": "Glock-18 | Fade", "weapon": "Glock-18", "type": "Pistol", "rarity": "restricted", "base_price": 480.00, "image": RIFLE_IMG},
-    {"name": "Desert Eagle | Blaze", "weapon": "Desert Eagle", "type": "Pistol", "rarity": "restricted", "base_price": 520.00, "image": RIFLE_IMG_2},
-    # Mil-Spec (Blue)
-    {"name": "AK-47 | Elite Build", "weapon": "AK-47", "type": "Rifle", "rarity": "milspec", "base_price": 8.50, "image": RIFLE_IMG_2},
-    {"name": "M4A1-S | Basilisk", "weapon": "M4A1-S", "type": "Rifle", "rarity": "milspec", "base_price": 6.20, "image": RIFLE_IMG},
-    {"name": "AWP | Pit Viper", "weapon": "AWP", "type": "Sniper Rifle", "rarity": "milspec", "base_price": 4.80, "image": RIFLE_IMG_2},
-    # Industrial (Light Blue)
-    {"name": "MP7 | Skulls", "weapon": "MP7", "type": "SMG", "rarity": "industrial", "base_price": 1.20, "image": RIFLE_IMG},
-    {"name": "P90 | Sand Spray", "weapon": "P90", "type": "SMG", "rarity": "industrial", "base_price": 0.85, "image": RIFLE_IMG_2},
-    # Consumer (Grey)
-    {"name": "MAC-10 | Indigo", "weapon": "MAC-10", "type": "SMG", "rarity": "consumer", "base_price": 0.30, "image": RIFLE_IMG_2},
-    {"name": "Nova | Forest Leaves", "weapon": "Nova", "type": "Shotgun", "rarity": "consumer", "base_price": 0.15, "image": RIFLE_IMG},
-]
+WEAR_MULT = {
+    "Factory New": 1.75,
+    "Minimal Wear": 1.25,
+    "Field-Tested": 1.0,
+    "Well-Worn": 0.72,
+    "Battle-Scarred": 0.55,
+}
 
 
-def build_seed_listings():
-    """Return listing dicts to seed marketplace catalog (marketplace listings owned by system)."""
-    import uuid
-    import random
-    from datetime import datetime, timezone
+async def fetch_skins_master() -> list[dict]:
+    """Fetch full skin catalog from ByMykel API."""
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
+        resp = await c.get(SKINS_API_URL)
+    resp.raise_for_status()
+    data = resp.json()
+
+    catalog = []
+    for s in data:
+        rid = (s.get("rarity") or {}).get("id")
+        if rid not in RARITY_MAP:
+            continue
+        rarity = RARITY_MAP[rid]
+        weapon = (s.get("weapon") or {}).get("name", "")
+        category = (s.get("category") or {}).get("name", "")
+        image = s.get("image")
+        if not image or not weapon:
+            continue
+
+        # Map category to our type
+        type_ = "Rifle"
+        cat_lower = category.lower()
+        if "pistol" in cat_lower: type_ = "Pistol"
+        elif "sniper" in cat_lower: type_ = "Sniper Rifle"
+        elif "smg" in cat_lower: type_ = "SMG"
+        elif "shotgun" in cat_lower: type_ = "Shotgun"
+        elif "machinegun" in cat_lower or "heavy" in cat_lower: type_ = "Machinegun"
+        elif "knife" in cat_lower or s.get("name", "").startswith("★"): type_ = "Knife"
+        elif "glove" in cat_lower or "wraps" in s.get("name", "").lower(): type_ = "Gloves"
+
+        catalog.append({
+            "master_id": s.get("id"),
+            "name": s.get("name"),
+            "weapon": weapon,
+            "type": type_,
+            "rarity": rarity,
+            "image": image,
+            "min_float": s.get("min_float"),
+            "max_float": s.get("max_float"),
+        })
+    return catalog
+
+
+def price_for(rarity: str, wear: str, seed: str = "") -> float:
+    lo, hi = PRICE_RANGES.get(rarity, (1.0, 10.0))
+    # Deterministic-ish variance per skin
+    rng = random.Random(seed + rarity)
+    base = rng.uniform(lo, hi)
+    mult = WEAR_MULT[wear] * rng.uniform(0.85, 1.15)
+    return round(base * mult, 2)
+
+
+def build_seed_listings(master: list[dict], target_count: int = 200) -> list[dict]:
+    """Sample skins across rarities and generate listings with varied wears/floats."""
+    # Group by rarity to ensure representation
+    by_rar = {}
+    for m in master:
+        by_rar.setdefault(m["rarity"], []).append(m)
+
+    # Weights: how many listings per rarity bucket (roughly matching real market distribution)
+    weights = {
+        "consumer": 15, "industrial": 18, "milspec": 40,
+        "restricted": 40, "classified": 35, "covert": 40, "contraband": 12,
+    }
+    total_weight = sum(weights.values())
 
     listings = []
-    for skin in CATALOG:
-        # Create 1-2 listings per skin with different wear/float
-        n = random.randint(1, 2)
-        for _ in range(n):
-            wear = random.choice(WEARS)
-            float_val = round(random.uniform(0.001, 0.75), 4)
-            # Price varies by wear
-            wear_multiplier = {
-                "Factory New": 1.5,
-                "Minimal Wear": 1.15,
-                "Field-Tested": 1.0,
-                "Well-Worn": 0.75,
-                "Battle-Scarred": 0.55,
-            }[wear]
-            price = round(skin["base_price"] * wear_multiplier * random.uniform(0.9, 1.1), 2)
+    for rar, w in weights.items():
+        pool = by_rar.get(rar, [])
+        if not pool:
+            continue
+        n = int(target_count * w / total_weight)
+        picks = random.sample(pool, min(n, len(pool)))
+        for skin in picks:
+            wear = random.choices(
+                WEARS,
+                weights=[15, 25, 35, 15, 10],
+            )[0]
+            fn, mx = skin.get("min_float") or 0.0, skin.get("max_float") or 1.0
+            float_val = round(random.uniform(float(fn), float(mx)), 4)
+            price = price_for(rar, wear, seed=skin["master_id"])
             listings.append({
                 "id": str(uuid.uuid4()),
                 "skin_name": skin["name"],
                 "weapon": skin["weapon"],
                 "type": skin["type"],
-                "rarity": skin["rarity"],
+                "rarity": rar,
                 "wear": wear,
                 "float_value": float_val,
                 "price_usd": price,
@@ -88,6 +147,7 @@ def build_seed_listings():
                 "seller_name": "CS2 Market Bot",
                 "status": "active",
                 "is_catalog": True,
+                "catalog_version": 2,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             })
     return listings

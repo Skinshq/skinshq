@@ -18,7 +18,7 @@ from emergentintegrations.payments.stripe.checkout import (
 )
 
 from steam_auth import build_login_url, validate_openid, fetch_player_summary, fetch_cs2_inventory, demo_inventory
-from skins_catalog import build_seed_listings, RARITIES
+from skins_catalog import build_seed_listings, fetch_skins_master, RARITIES
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -99,12 +99,45 @@ class ListingCreate(BaseModel):
 
 @app.on_event("startup")
 async def seed_catalog():
-    count = await db.listings.count_documents({"is_catalog": True})
-    if count == 0:
-        seed = build_seed_listings()
-        if seed:
-            await db.listings.insert_many(seed)
-            log.info(f"Seeded {len(seed)} catalog listings")
+    """Fetch real CS2 skins master data from ByMykel API and seed marketplace."""
+    # Fetch master skins list (cache in Mongo)
+    master_meta = await db.skins_master_meta.find_one({"id": "meta"})
+    need_refresh = True
+    if master_meta:
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(master_meta["updated"])).total_seconds()
+            if age < 86400:  # 24h
+                need_refresh = False
+        except Exception:
+            pass
+
+    if need_refresh:
+        try:
+            master = await fetch_skins_master()
+            if master:
+                await db.skins_master.delete_many({})
+                await db.skins_master.insert_many(master)
+                await db.skins_master_meta.update_one(
+                    {"id": "meta"},
+                    {"$set": {"id": "meta", "updated": datetime.now(timezone.utc).isoformat(),
+                              "count": len(master)}},
+                    upsert=True,
+                )
+                log.info(f"Fetched {len(master)} skins from ByMykel API")
+        except Exception as e:
+            log.error(f"Failed to fetch skins master: {e}")
+
+    # Re-seed catalog listings if using old v1 seed OR none exist
+    v2_count = await db.listings.count_documents({"is_catalog": True, "catalog_version": 2})
+    if v2_count == 0:
+        # Remove old catalog and re-seed with real skins
+        await db.listings.delete_many({"is_catalog": True})
+        master_docs = await db.skins_master.find({}, {"_id": 0}).to_list(length=None)
+        if master_docs:
+            seed = build_seed_listings(master_docs, target_count=200)
+            if seed:
+                await db.listings.insert_many(seed)
+                log.info(f"Seeded {len(seed)} real CS2 skin listings")
 
 
 # ---------------- Health ----------------
@@ -175,6 +208,18 @@ async def get_inventory(user=Depends(get_current_user)):
         return {"items": items, "is_demo": True,
                 "message": "Your Steam CS2 inventory is private or empty. Showing demo items so you can preview the flow."}
     return {"items": items, "is_demo": False}
+
+
+@api.get("/skins/search")
+async def skins_search(q: str = "", rarity: str = "", limit: int = 40):
+    """Search the master skins catalog (2000+ real CS2 skins)."""
+    query = {}
+    if q:
+        query["name"] = {"$regex": q, "$options": "i"}
+    if rarity:
+        query["rarity"] = rarity
+    items = await db.skins_master.find(query, {"_id": 0}).limit(limit).to_list(limit)
+    return {"items": items}
 
 
 # ---------------- Marketplace Listings ----------------
