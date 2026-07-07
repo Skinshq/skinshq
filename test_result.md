@@ -101,3 +101,112 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: "Add live Steam Market price sync to the CS2 marketplace. Every 6h + on startup, fetch real market prices, match by market_hash_name, expose market_price_usd + min/max + volume_7d + updated_at on /api/skins/all and /api/skins/detail. Add admin refresh endpoint. Show 'Steam Market: $X · updated Nh ago' on the Market card and Skin Detail page."
+
+backend:
+  - task: "Live Steam Market price sync (search/render pagination)"
+    implemented: true
+    working: true
+    file: "backend/price_sync.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Built async paginator over https://steamcommunity.com/market/search/render/?appid=730 with 3s pacing, exponential 429 back-off (30s * attempt, up to 5 tries), and 5-consecutive-failure abort. Upserts into `market_prices` collection keyed by market_hash_name. Default 60-page cap (~6000 items) per scheduled run; full=true walks entire ~34k catalog. Scheduler: asyncio task, 90s initial delay + 6h interval. Confirmed working end-to-end via live UI + curl — populated 1000+ prices in first partial run and endpoints returned correct market_price_usd (e.g. AK-47 | Aquamarine Revenge → $53.21, 152 on sale)."
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED: Price sync working correctly. Backend logs show successful sync of 600 items in 189.2s with proper Steam API pagination (3s delay between requests). Sync state shows: running=false, last_count=600, total_items=34319. Background scheduler is active and syncing prices every 6h. No errors in logs."
+
+  - task: "GET /api/skins/all — attach live market_price_usd + min/max/volume/updated_at"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Each item enriched via get_market_summary_for(name) which aggregates across all wear variants (regex ^name( \\(|$) — excludes StatTrak/Souvenir which start with those prefixes). Card price = Field-Tested if present else median. Returns market_price_usd=null when no data yet, so cards gracefully fall back to reference price."
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED: All required fields present in response: master_id, name, weapon, rarity, image, reference_price_usd, price_range_usd, live_listings, market_price_usd, market_price_updated_at. Tested with page_size=10, found 2/10 items with live market prices. Items without prices correctly return market_price_usd=null. Found real market price: AK-47 | Aquamarine Revenge = $53.21 with updated_at timestamp."
+
+  - task: "GET /api/skins/detail/{master_id} — attach market_variants breakdown"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Returns market_variants: [{market_hash_name, price_usd, listings, updated_at}, ...] plus market_price_min/max/median and volume_7d. Verified in browser: 'Steam Market · price by wear' panel renders per-wear rows."
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED: Tested skin-0ffd6029f447 (AK-47 | Aquamarine Revenge). Response contains both 'skin' and 'listings' keys. Skin object has all required market fields: market_price_usd=$53.21, market_price_min=$53.21, market_price_max=$53.21, market_price_median=$53.21, volume_7d=152, market_price_updated_at with timestamp. market_variants array contains 1 wear condition with correct structure (market_hash_name, price_usd, listings, updated_at). Reference price fields (reference_price_usd, price_range_usd) still present as fallback. Also tested skin without market data (AK-47 | Aphrodite) - correctly returns HTTP 200 with market_price_usd=null and market_variants=[]."
+
+  - task: "POST /api/skins/refresh-prices (admin-only) + GET /api/skins/price-sync-status"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Admin endpoint gated by X-Admin-Token header matching ADMIN_TOKEN env. Supports ?full=true. Returns immediately; async task syncs in background. Public GET /price-sync-status exposes running flag, timestamps, count, last_error. Curl-tested: no token → 403, wrong token → 403, right token → 200 + started=true."
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED: All auth scenarios working correctly. (1) GET /api/skins/price-sync-status returns HTTP 200 with all required keys: running (bool), last_started_at, last_finished_at, last_error, last_count, total_items. (2) POST /api/skins/refresh-prices without token → HTTP 403 with 'Admin token required'. (3) POST with wrong token → HTTP 403. (4) POST with correct ADMIN_TOKEN → HTTP 200 with {ok:true, started:true, full:false, state:{...}}. (5) POST with ?full=true query param → HTTP 200 with full:true in response. Background sync triggered successfully."
+
+frontend:
+  - task: "MarketplacePage — Steam Market price + freshness badge on card"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/pages/MarketplacePage.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Card now prefers s.market_price_usd when present, with green 'STEAM MARKET' label + pulsing dot + timeAgo(updated_at) + volume. Falls back to Reference price when no data. Verified in browser screenshot: 10 Steam Market cards visible on filtered Covert page."
+
+  - task: "SkinDetailPage — Steam Market live panel + per-wear breakdown"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/pages/SkinDetailPage.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Main price panel now shows 'Steam Market · live · $X' with min/max range, on-sale volume, and 'Updated Nh ago'. New second panel lists all wear variants sorted by price with per-wear listings count. Verified in browser."
+
+metadata:
+  created_by: "main"
+  version: "1.2"
+  test_sequence: 2
+
+test_plan:
+  current_focus:
+    - "Live Steam Market price sync (search/render pagination)"
+    - "GET /api/skins/all — attach live market_price_usd + min/max/volume/updated_at"
+    - "GET /api/skins/detail/{master_id} — attach market_variants breakdown"
+    - "POST /api/skins/refresh-prices (admin-only) + GET /api/skins/price-sync-status"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    - agent: "main"
+      message: "Added live Steam Market price sync end-to-end. Data source is Steam's own public /market/search/render endpoint (was going to use csgobackpack.net per user's suggestion but that domain is behind a Cloudflare bot-challenge that blocks all server-side requests — switched to Steam direct which is more authoritative and reliable). Please backend-test: (1) GET /api/skins/price-sync-status returns valid JSON shape (running bool, timestamps, count). (2) POST /api/skins/refresh-prices without X-Admin-Token → 403, with wrong token → 403, with correct token from backend/.env ADMIN_TOKEN → 200 + started=true. (3) GET /api/skins/all?page_size=5 items each have keys: market_price_usd (may be null), market_price_updated_at, reference_price_usd. (4) GET /api/skins/detail/skin-0ffd6029f447 returns skin.market_variants array + skin.market_price_usd + skin.market_price_min/max/median + skin.volume_7d when data present. Note: first background sync completed for ~1000-6000 items during my dev-testing so many popular skins already have prices. Skins without prices should gracefully return market_price_usd=null (not error out). Admin token is in /app/backend/.env as ADMIN_TOKEN."
+    - agent: "testing"
+      message: "✅ ALL BACKEND TESTS PASSED (9/9). Comprehensive testing completed for all Steam Market price sync endpoints. All endpoints working correctly with proper authentication, data structure, and error handling. Price sync background scheduler is active and syncing 600 items every 6h. Real market prices are being fetched from Steam API and correctly aggregated across wear variants. Items without market data gracefully return null values without errors. Backend implementation is production-ready."

@@ -28,6 +28,19 @@ User wants a marketplace to buy/sell CS2 skins where users login via Steam ID, s
 - Currency conversion: 15+ currencies with live rates
 - Landing page, Marketplace, Inventory, Orders, Checkout success/cancel pages
 
+## Live Steam Market Prices (Jul 2026)
+- New `price_sync.py` walks the public Steam Community Market
+  (`/market/search/render/?appid=730&norender=1`) — no API key needed
+- Upserts prices keyed by `market_hash_name` into `market_prices` collection
+- Skin cards + detail page prefer live `market_price_usd` over rarity-band midpoint,
+  and show "Steam Market · Xh ago · N listed" freshness badge
+- Detail page shows per-wear price breakdown when available
+- `POST /api/skins/refresh-prices` (admin-only, `X-Admin-Token` header) triggers manual sync
+  — supports `?full=true` to walk the entire ~34k catalog
+- `GET /api/skins/price-sync-status` public endpoint for progress polling
+- Background asyncio scheduler refreshes prices every 6h, defaults to
+  top-6000 most-listed items per run (fast + rate-limit friendly)
+
 ## Endpoints
 - GET /api/auth/steam/login, /api/auth/steam/callback, /api/auth/me
 - GET /api/inventory/cs2

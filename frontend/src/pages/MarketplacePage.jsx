@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import api from "../lib/api";
 import { useCurrency } from "../context/CurrencyContext";
+import { timeAgo } from "../lib/utils";
 
 const RARITIES = [
   { key: "consumer", label: "Consumer" },
@@ -127,8 +128,24 @@ export default function MarketplacePage() {
                   <div className="text-[10px] uppercase tracking-[0.15em] text-[#555] font-mono">{s.weapon}</div>
                   <div className="text-sm font-medium text-[#E0E0E0] leading-tight line-clamp-2 min-h-[2.5rem]">{s.name}</div>
                   <div className="mt-auto pt-2 border-t border-white/5">
-                    <div className="text-[10px] uppercase tracking-widest text-[#555]">Reference price</div>
-                    <div className="font-mono text-base font-bold text-[#E4AE39]">{format(s.reference_price_usd)}</div>
+                    {s.market_price_usd != null ? (
+                      <>
+                        <div className="text-[10px] uppercase tracking-widest text-[#2ECC71] flex items-center gap-1">
+                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#2ECC71] animate-pulse" />
+                          Steam Market
+                        </div>
+                        <div className="font-mono text-base font-bold text-[#E4AE39]">{format(s.market_price_usd)}</div>
+                        <div className="text-[9px] text-[#555] font-mono mt-0.5">
+                          {timeAgo(s.market_price_updated_at) || "live"}
+                          {s.volume_7d ? <span className="ml-1">· {s.volume_7d.toLocaleString()} listed</span> : null}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-[10px] uppercase tracking-widest text-[#555]">Reference price</div>
+                        <div className="font-mono text-base font-bold text-[#E4AE39]">{format(s.reference_price_usd)}</div>
+                      </>
+                    )}
                   </div>
                 </div>
               </Link>

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import api from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { useCurrency } from "../context/CurrencyContext";
+import { timeAgo } from "../lib/utils";
 
 const rarityLabel = {
   consumer: "Consumer Grade", industrial: "Industrial Grade", milspec: "Mil-Spec Grade",
@@ -93,16 +94,66 @@ export default function SkinDetailPage() {
           </h1>
 
           <div className="bg-[#121212] border border-white/10 rounded-sm p-5 mb-4">
-            <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-[#555] mb-2">
-              <TrendingUp className="w-3 h-3" /> Reference price
-            </div>
-            <div className="font-mono text-3xl font-black text-[#E4AE39]">
-              {format(skin.reference_price_usd)}
-            </div>
-            <div className="text-xs text-[#8A8A8A] mt-1 font-mono">
-              Range: {format(skin.price_range_usd?.low || 0)} — {format(skin.price_range_usd?.high || 0)}
-            </div>
+            {skin.market_price_usd != null ? (
+              <>
+                <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-[#2ECC71] mb-2">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#2ECC71] animate-pulse" />
+                  Steam Market <span className="text-[#555]">· live</span>
+                </div>
+                <div className="font-mono text-3xl font-black text-[#E4AE39]">
+                  {format(skin.market_price_usd)}
+                </div>
+                <div className="text-xs text-[#8A8A8A] mt-1 font-mono">
+                  Range: {format(skin.market_price_min || 0)} — {format(skin.market_price_max || 0)}
+                  {skin.volume_7d ? <span className="ml-2">· {skin.volume_7d.toLocaleString()} on sale</span> : null}
+                </div>
+                <div className="text-[10px] text-[#555] mt-1 font-mono">
+                  Updated {timeAgo(skin.market_price_updated_at) || "recently"}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-[#555] mb-2">
+                  <TrendingUp className="w-3 h-3" /> Reference price
+                </div>
+                <div className="font-mono text-3xl font-black text-[#E4AE39]">
+                  {format(skin.reference_price_usd)}
+                </div>
+                <div className="text-xs text-[#8A8A8A] mt-1 font-mono">
+                  Range: {format(skin.price_range_usd?.low || 0)} — {format(skin.price_range_usd?.high || 0)}
+                </div>
+              </>
+            )}
           </div>
+
+          {Array.isArray(skin.market_variants) && skin.market_variants.length > 0 && (
+            <div className="bg-[#0F0F0F] border border-white/10 rounded-sm p-4 mb-4">
+              <div className="text-[10px] uppercase tracking-widest text-[#555] mb-3 font-mono">
+                Steam Market · price by wear
+              </div>
+              <div className="space-y-1.5">
+                {skin.market_variants
+                  .slice()
+                  .sort((a, b) => (a.price_usd || 0) - (b.price_usd || 0))
+                  .map((v) => {
+                    // Extract wear from name e.g. "AK-47 | Redline (Field-Tested)"
+                    const m = v.market_hash_name.match(/\(([^)]+)\)\s*$/);
+                    const label = m ? m[1] : "Vanilla";
+                    return (
+                      <div key={v.market_hash_name} className="flex items-center justify-between text-xs">
+                        <span className="text-[#E0E0E0]">{label}</span>
+                        <span className="flex items-center gap-3">
+                          {v.listings ? (
+                            <span className="text-[10px] text-[#555] font-mono">{v.listings.toLocaleString()} on sale</span>
+                          ) : null}
+                          <span className="font-mono font-bold text-[#E4AE39]">{format(v.price_usd)}</span>
+                        </span>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
 
           {cheapest && (
             <div className="bg-[#0F1F14] border border-[#2ECC71]/30 rounded-sm p-5 mb-4">

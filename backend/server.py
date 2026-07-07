@@ -19,6 +19,12 @@ from emergentintegrations.payments.stripe.checkout import (
 
 from steam_auth import build_login_url, validate_openid, fetch_player_summary, fetch_cs2_inventory, demo_inventory
 from skins_catalog import build_seed_listings, fetch_skins_master, RARITIES
+from price_sync import (
+    sync_all_prices,
+    get_sync_state,
+    get_market_summary_for,
+    start_scheduler as start_price_scheduler,
+)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -29,6 +35,8 @@ STRIPE_KEY = os.environ.get("STRIPE_API_KEY", "")
 STEAM_API_KEY = os.environ.get("STEAM_API_KEY", "")
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
+PRICE_SYNC_ENABLED = os.environ.get("PRICE_SYNC_ENABLED", "1") == "1"
 
 # Stripe checkout is initialized per-request via StripeCheckout(api_key=STRIPE_KEY, webhook_url=...)
 
@@ -130,6 +138,16 @@ async def seed_catalog():
     # No longer seed system listings — marketplace = full master catalog.
     # Remove any legacy seeded listings so /marketplace/listings only shows real user listings.
     await db.listings.delete_many({"is_catalog": True})
+
+    # Index for fast market_prices lookups + uniqueness
+    try:
+        await db.market_prices.create_index("market_hash_name", unique=True)
+    except Exception as e:
+        log.warning(f"market_prices index warning: {e}")
+
+    # Launch background price sync scheduler (6h refresh). Non-blocking.
+    if PRICE_SYNC_ENABLED:
+        start_price_scheduler(db)
 
 
 # ---------------- Health ----------------
@@ -395,6 +413,19 @@ async def skin_detail(master_id: str):
     lo, hi = PRICE_RANGES.get(skin.get("rarity"), (1.0, 10.0))
     skin["reference_price_usd"] = round((lo + hi) / 2, 2)
     skin["price_range_usd"] = {"low": lo, "high": hi}
+    # Attach live Steam Market prices (aggregated across wear variants)
+    summary = await get_market_summary_for(db, skin["name"])
+    if summary:
+        skin["market_price_usd"] = summary["market_price_usd"]
+        skin["market_price_min"] = summary["market_price_min"]
+        skin["market_price_max"] = summary["market_price_max"]
+        skin["market_price_median"] = summary["market_price_median"]
+        skin["volume_7d"] = summary["volume_7d"]
+        skin["market_price_updated_at"] = summary["market_price_updated_at"]
+        skin["market_variants"] = summary["variants"]
+    else:
+        skin["market_price_usd"] = None
+        skin["market_variants"] = []
     return {"skin": skin, "listings": listings, "listings_count": len(listings)}
 
 
@@ -433,7 +464,48 @@ async def skins_all(
         d["live_listings"] = await db.listings.count_documents({
             "skin_name": d.get("name"), "status": "active"
         })
+        # Live Steam Market price (aggregated across wears)
+        summary = await get_market_summary_for(db, d["name"])
+        if summary:
+            d["market_price_usd"] = summary["market_price_usd"]
+            d["market_price_min"] = summary["market_price_min"]
+            d["market_price_max"] = summary["market_price_max"]
+            d["volume_7d"] = summary["volume_7d"]
+            d["market_price_updated_at"] = summary["market_price_updated_at"]
+        else:
+            d["market_price_usd"] = None
+            d["market_price_updated_at"] = None
     return {"items": docs, "total": total, "page": page, "page_size": page_size}
+
+
+# ---------------- Admin: price sync ----------------
+
+def _require_admin(x_admin_token: Optional[str] = Header(None)):
+    if not ADMIN_TOKEN:
+        raise HTTPException(500, "ADMIN_TOKEN not configured on server")
+    if not x_admin_token or x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+    return True
+
+
+@api.post("/skins/refresh-prices")
+async def refresh_prices(full: bool = False, _: bool = Depends(_require_admin)):
+    """Trigger a Steam Market price sync in the background.
+    By default syncs the top-6000 most-listed items (~3 min). Pass ?full=true
+    to walk the entire ~34k catalog (~15 min, higher rate-limit risk).
+    Returns immediately; poll GET /skins/price-sync-status for progress."""
+    import asyncio as _aio
+    state = get_sync_state()
+    if state["running"]:
+        return {"ok": True, "already_running": True, "state": state}
+    _aio.create_task(sync_all_prices(db, full=full))
+    return {"ok": True, "started": True, "full": full, "state": get_sync_state()}
+
+
+@api.get("/skins/price-sync-status")
+async def price_sync_status():
+    """Public: last sync timestamp + running flag (safe to expose)."""
+    return get_sync_state()
 
 
 # ---------------- Marketplace Listings ----------------
