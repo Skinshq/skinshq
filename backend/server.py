@@ -12,7 +12,10 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime, timezone, timedelta
-import stripe
+from emergentintegrations.payments.stripe.checkout import (
+    StripeCheckout,
+    CheckoutSessionRequest,
+)
 
 from steam_auth import build_login_url, validate_openid, fetch_player_summary, fetch_cs2_inventory, demo_inventory
 from skins_catalog import build_seed_listings, RARITIES
@@ -27,7 +30,7 @@ STEAM_API_KEY = os.environ.get("STEAM_API_KEY", "")
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
-stripe.api_key = STRIPE_KEY
+# Stripe checkout is initialized per-request via StripeCheckout(api_key=STRIPE_KEY, webhook_url=...)
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
@@ -260,7 +263,7 @@ async def my_listings(user=Depends(get_current_user)):
 # ---------------- Stripe Checkout ----------------
 
 @api.post("/checkout/{listing_id}")
-async def create_checkout(listing_id: str, user=Depends(get_current_user)):
+async def create_checkout(listing_id: str, request: Request, user=Depends(get_current_user)):
     listing = await db.listings.find_one({"id": listing_id}, {"_id": 0})
     if not listing:
         raise HTTPException(404, "Listing not found")
@@ -270,27 +273,26 @@ async def create_checkout(listing_id: str, user=Depends(get_current_user)):
         raise HTTPException(400, "Cannot buy your own listing")
 
     order_id = str(uuid.uuid4())
-    amount_cents = int(round(listing["price_usd"] * 100))
+    origin = str(request.base_url).rstrip("/")
+    # If frontend and backend share the same host (Kubernetes ingress), use FRONTEND_URL
+    success_base = FRONTEND_URL or origin
+    webhook_url = f"{origin}/api/webhook/stripe"
 
+    checkout = StripeCheckout(api_key=STRIPE_KEY, webhook_url=webhook_url)
+    req = CheckoutSessionRequest(
+        amount=float(listing["price_usd"]),
+        currency="usd",
+        success_url=f"{success_base}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}&order_id={order_id}",
+        cancel_url=f"{success_base}/checkout/cancel?order_id={order_id}",
+        metadata={
+            "order_id": order_id,
+            "listing_id": listing_id,
+            "buyer_id": user["id"],
+            "seller_id": listing["seller_id"],
+        },
+    )
     try:
-        session = stripe.checkout.Session.create(
-            mode="payment",
-            payment_method_types=["card"],
-            line_items=[{
-                "price_data": {
-                    "currency": "usd",
-                    "product_data": {
-                        "name": listing["skin_name"],
-                        "description": f"{listing.get('wear', '')} • {listing['rarity'].upper()}",
-                    },
-                    "unit_amount": amount_cents,
-                },
-                "quantity": 1,
-            }],
-            success_url=f"{FRONTEND_URL}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}&order_id={order_id}",
-            cancel_url=f"{FRONTEND_URL}/checkout/cancel?order_id={order_id}",
-            metadata={"order_id": order_id, "listing_id": listing_id, "buyer_id": user["id"]},
-        )
+        session = await checkout.create_checkout_session(req)
     except Exception as e:
         log.error(f"Stripe error: {e}")
         raise HTTPException(500, f"Payment provider error: {e}")
@@ -305,17 +307,31 @@ async def create_checkout(listing_id: str, user=Depends(get_current_user)):
         "seller_name": listing["seller_name"],
         "amount_usd": listing["price_usd"],
         "currency": "usd",
-        "stripe_session_id": session.id,
+        "stripe_session_id": session.session_id,
         "status": "pending",
         "trade_status": "awaiting_payment",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.orders.insert_one(order.copy())
-    return {"session_id": session.id, "checkout_url": session.url, "order_id": order_id}
+
+    # Also record in payment_transactions per playbook
+    await db.payment_transactions.insert_one({
+        "session_id": session.session_id,
+        "order_id": order_id,
+        "amount": float(listing["price_usd"]),
+        "currency": "usd",
+        "user_id": user["id"],
+        "metadata": {"order_id": order_id, "listing_id": listing_id},
+        "payment_status": "initiated",
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    return {"session_id": session.session_id, "checkout_url": session.url, "order_id": order_id}
 
 
 @api.get("/orders/{order_id}/status")
-async def order_status(order_id: str, user=Depends(get_current_user)):
+async def order_status(order_id: str, request: Request, user=Depends(get_current_user)):
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(404, "Order not found")
@@ -324,24 +340,66 @@ async def order_status(order_id: str, user=Depends(get_current_user)):
 
     # Sync with Stripe if still pending
     if order["status"] == "pending" and order.get("stripe_session_id"):
+        origin = str(request.base_url).rstrip("/")
+        webhook_url = f"{origin}/api/webhook/stripe"
+        checkout = StripeCheckout(api_key=STRIPE_KEY, webhook_url=webhook_url)
         try:
-            session = stripe.checkout.Session.retrieve(order["stripe_session_id"])
-            if session.payment_status == "paid":
-                # Mark listing sold + order paid + mocked trade progression
-                await db.orders.update_one(
-                    {"id": order_id},
+            status_resp = await checkout.get_checkout_status(order["stripe_session_id"])
+            if status_resp.payment_status == "paid":
+                # Idempotent update
+                res = await db.orders.update_one(
+                    {"id": order_id, "status": "pending"},
                     {"$set": {"status": "paid", "trade_status": "trade_sent",
                               "paid_at": datetime.now(timezone.utc).isoformat()}}
                 )
-                await db.listings.update_one(
-                    {"id": order["listing_id"]},
-                    {"$set": {"status": "sold"}}
-                )
+                if res.modified_count:
+                    await db.listings.update_one(
+                        {"id": order["listing_id"]},
+                        {"$set": {"status": "sold"}}
+                    )
+                    await db.payment_transactions.update_one(
+                        {"session_id": order["stripe_session_id"]},
+                        {"$set": {"payment_status": "paid", "status": "completed"}}
+                    )
                 order["status"] = "paid"
                 order["trade_status"] = "trade_sent"
         except Exception as e:
             log.error(f"Stripe sync error: {e}")
     return order
+
+
+@api.post("/webhook/stripe")
+async def stripe_webhook(request: Request):
+    body = await request.body()
+    sig = request.headers.get("Stripe-Signature", "")
+    origin = str(request.base_url).rstrip("/")
+    checkout = StripeCheckout(api_key=STRIPE_KEY, webhook_url=f"{origin}/api/webhook/stripe")
+    try:
+        event = await checkout.handle_webhook(body, sig)
+    except Exception as e:
+        log.error(f"Webhook error: {e}")
+        return JSONResponse({"error": "invalid"}, status_code=400)
+
+    if event.payment_status == "paid" and event.session_id:
+        order_id = (event.metadata or {}).get("order_id")
+        if order_id:
+            res = await db.orders.update_one(
+                {"id": order_id, "status": "pending"},
+                {"$set": {"status": "paid", "trade_status": "trade_sent",
+                          "paid_at": datetime.now(timezone.utc).isoformat()}}
+            )
+            if res.modified_count:
+                order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+                if order:
+                    await db.listings.update_one(
+                        {"id": order["listing_id"]},
+                        {"$set": {"status": "sold"}}
+                    )
+                await db.payment_transactions.update_one(
+                    {"session_id": event.session_id},
+                    {"$set": {"payment_status": "paid", "status": "completed"}}
+                )
+    return {"ok": True}
 
 
 @api.post("/orders/{order_id}/confirm-trade")
