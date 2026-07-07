@@ -1,9 +1,11 @@
-import React from "react";
-import { Link, useLocation } from "react-router-dom";
+import React, { useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { FaSteam } from "react-icons/fa";
 import { LogOut, ChevronDown } from "lucide-react";
+import { toast } from "sonner";
 import { useAuth } from "../context/AuthContext";
 import { useCurrency } from "../context/CurrencyContext";
+import api from "../lib/api";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -11,11 +13,31 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "./ui/dropdown-menu";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 
 export default function Navbar() {
-  const { user, logout, loginWithSteam } = useAuth();
+  const { user, logout, loginWithSteam, login } = useAuth();
   const { currency, changeCurrency, currencies } = useCurrency();
   const loc = useLocation();
+  const navigate = useNavigate();
+  const [showFallback, setShowFallback] = useState(false);
+  const [sid, setSid] = useState("");
+  const [signing, setSigning] = useState(false);
+
+  const signInWithSteamId = async () => {
+    setSigning(true);
+    try {
+      const { data } = await api.post("/auth/steamid", { steam_id: sid.trim() });
+      await login(data.token);
+      toast.success("Signed in as " + data.user.display_name);
+      setShowFallback(false);
+      navigate("/inventory");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Invalid SteamID64");
+    } finally {
+      setSigning(false);
+    }
+  };
 
   const NavLink = ({ to, children, testid }) => (
     <Link
@@ -114,14 +136,61 @@ export default function Navbar() {
               </DropdownMenuContent>
             </DropdownMenu>
           ) : (
-            <button
-              onClick={loginWithSteam}
-              data-testid="steam-login-button"
-              className="flex items-center gap-2 bg-[#171A21] text-[#E0E0E0] border border-[#2A475E] hover:bg-[#2A475E] transition-colors rounded-sm px-4 py-2 text-sm font-medium"
-            >
-              <FaSteam className="w-4 h-4" /> Sign in with Steam
-            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                data-testid="steam-login-button"
+                className="flex items-center gap-2 bg-[#171A21] text-[#E0E0E0] border border-[#2A475E] hover:bg-[#2A475E] transition-colors rounded-sm px-4 py-2 text-sm font-medium"
+              >
+                <FaSteam className="w-4 h-4" /> Sign in with Steam
+                <ChevronDown className="w-3 h-3" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="bg-[#121212] border-white/10 min-w-[240px]">
+                <DropdownMenuItem onSelect={loginWithSteam} data-testid="signin-openid"
+                  className="cursor-pointer focus:bg-white/10 flex flex-col items-start gap-0.5 py-2">
+                  <span className="text-sm font-medium">Steam OpenID (recommended)</span>
+                  <span className="text-[10px] text-[#8A8A8A]">Login via steamcommunity.com</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator className="bg-white/10" />
+                <DropdownMenuItem onSelect={(e) => { e.preventDefault(); setShowFallback(true); }} data-testid="signin-steamid"
+                  className="cursor-pointer focus:bg-white/10 flex flex-col items-start gap-0.5 py-2">
+                  <span className="text-sm font-medium">Sign in with SteamID64</span>
+                  <span className="text-[10px] text-[#8A8A8A]">Fallback if Steam site is unreachable</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
+
+          {/* SteamID64 fallback modal */}
+          <Dialog open={showFallback} onOpenChange={setShowFallback}>
+            <DialogContent className="bg-[#121212] border border-white/10 max-w-md rounded-sm" data-testid="steamid-modal">
+              <DialogHeader>
+                <DialogTitle className="font-display tracking-tight">Sign in with SteamID64</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                <p className="text-xs text-[#8A8A8A] leading-relaxed">
+                  Paste your <strong className="text-[#E0E0E0]">SteamID64</strong> (17-digit number starting with 7656…). You can find yours at{" "}
+                  <a href="https://steamid.io" target="_blank" rel="noreferrer" className="text-[#E4AE39] underline">steamid.io</a>
+                  {" "}or on your Steam profile URL. Your CS2 inventory must be set to Public.
+                </p>
+                <input
+                  value={sid}
+                  onChange={(e) => setSid(e.target.value)}
+                  data-testid="steamid-input"
+                  placeholder="76561198000000000"
+                  className="w-full bg-[#0A0A0A] border border-white/10 focus:border-[#E4AE39] rounded-sm px-3 py-3 font-mono text-sm outline-none"
+                />
+                <div className="flex gap-2 justify-end">
+                  <button onClick={() => setShowFallback(false)}
+                    className="px-4 py-2 text-sm text-[#8A8A8A] hover:text-white">Cancel</button>
+                  <button onClick={signInWithSteamId} disabled={signing || !sid.trim()}
+                    data-testid="steamid-submit"
+                    className="bg-[#E4AE39] hover:bg-[#F5C75A] text-[#0A0A0A] font-bold px-6 py-2 rounded-sm disabled:opacity-50">
+                    {signing ? "Signing in…" : "Sign in"}
+                  </button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
         </div>
       </div>
     </header>

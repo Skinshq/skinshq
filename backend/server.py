@@ -184,6 +184,39 @@ async def steam_callback(request: Request):
     return RedirectResponse(url=f"{FRONTEND_URL}/auth/callback?token={token}")
 
 
+class SteamIdLogin(BaseModel):
+    steam_id: str
+
+
+@api.post("/auth/steamid")
+async def login_with_steamid(payload: SteamIdLogin):
+    """Fallback login: accept SteamID64 directly (no Steam OpenID required).
+    Useful when the user's network cannot reach steamcommunity.com.
+    Note: identity is NOT cryptographically verified — user is responsible for entering their own ID.
+    The inventory endpoint will only return items if the Steam inventory is Public.
+    """
+    steam_id = (payload.steam_id or "").strip()
+    if not steam_id.isdigit() or len(steam_id) != 17 or not steam_id.startswith("7656"):
+        raise HTTPException(400, "Invalid SteamID64 (must be a 17-digit number starting with 7656)")
+
+    user = await db.users.find_one({"steam_id": steam_id}, {"_id": 0})
+    if not user:
+        summary = await fetch_player_summary(steam_id, STEAM_API_KEY) or {}
+        user = {
+            "id": str(uuid.uuid4()),
+            "steam_id": steam_id,
+            "display_name": summary.get("personaname", f"Player {steam_id[-6:]}"),
+            "avatar": summary.get("avatarfull"),
+            "profile_url": summary.get("profileurl", f"https://steamcommunity.com/profiles/{steam_id}"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.users.insert_one(user.copy())
+        user.pop("_id", None)
+
+    token = make_jwt(user["id"], steam_id)
+    return {"token": token, "user": user}
+
+
 @api.get("/auth/me")
 async def me(user=Depends(get_current_user)):
     return user
