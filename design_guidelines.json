@@ -1,0 +1,111 @@
+{
+  "theme": "dark",
+  "archetype": "7 (Electric & Neon) / IDE-Brutalist variation for Gaming",
+  "domain": "Gaming/E-commerce/Marketplace",
+  "typography": {
+    "fonts": {
+      "heading": "Unbounded",
+      "body": "IBM Plex Sans",
+      "mono": "JetBrains Mono"
+    },
+    "setup_instructions": "Import fonts using standard CSS @import from Google Fonts.",
+    "scales": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tighter font-black",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight font-bold",
+      "h3": "text-xl sm:text-2xl tracking-tight font-semibold",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm tracking-wide",
+      "overline": "text-xs uppercase tracking-[0.2em]"
+    }
+  },
+  "colors": {
+    "background": {
+      "main": "#0A0A0A",
+      "surface": "#121212",
+      "surfaceHover": "#1C1C1C",
+      "glass": "rgba(10, 10, 10, 0.6)"
+    },
+    "text": {
+      "primary": "#E0E0E0",
+      "secondary": "#8A8A8A",
+      "muted": "#555555",
+      "inverse": "#0A0A0A"
+    },
+    "primary": "#E4AE39",
+    "accents": {
+      "success": "#2ECC71",
+      "danger": "#EB4B4B",
+      "info": "#4B69FF"
+    },
+    "cs2_rarities": {
+      "consumer": "#B0C3D9",
+      "industrial": "#5E98D9",
+      "milspec": "#4B69FF",
+      "restricted": "#8847FF",
+      "classified": "#D32CE6",
+      "covert": "#EB4B4B",
+      "contraband": "#E4AE39"
+    }
+  },
+  "layout_and_spacing": {
+    "philosophy": "Generous Spacing + Control Room Grid",
+    "container": "max-w-7xl mx-auto px-6 lg:px-12",
+    "marketplace_grid": "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 lg:grid-cols-5 gap-4 md:gap-6",
+    "card_padding": "p-4",
+    "section_spacing": "py-16 md:py-24"
+  },
+  "components": {
+    "skin_card": {
+      "structure": "Flat surface, sharp edges (rounded-sm), 1px subtle border.",
+      "visual": "Dark gray background (#121212). The bottom edge MUST have a 3px to 4px solid border matching the skin's rarity color.",
+      "hover_state": "Slight lift (-translate-y-1), border color glow (drop-shadow using rarity color), background lightens slightly to #1C1C1C.",
+      "image_container": "Aspect ratio 4:3, pure black or dark radial gradient background to make the skin pop."
+    },
+    "buttons": {
+      "primary": "bg-[#E4AE39] text-[#0A0A0A] font-bold rounded-sm px-6 py-3 hover:bg-[#F5C75A] transition-colors",
+      "steam_login": "bg-[#171A21] text-[#E0E0E0] border border-[#2A475E] rounded-sm px-6 py-3 flex items-center gap-3 hover:bg-[#2A475E] transition-colors"
+    },
+    "navigation": {
+      "style": "Crystal Glass variant: bg-black/60 backdrop-blur-xl border-b border-white/10 sticky top-0 z-50",
+      "layout": "Flex justify-between, items-center, h-16 or h-20. Steam login on the right."
+    },
+    "filters_sidebar": {
+      "style": "Sticky left column, transparent background, text-[#E0E0E0], custom checkboxes with rarity colors."
+    }
+  },
+  "motion_and_interactions": {
+    "hover": "transition-transform duration-200 ease-out",
+    "card_enter": "staggered fade-up for inventory/marketplace grids",
+    "modals": "backdrop-blur-md for the overlay, sharp modal dialog with 1px border-white/10"
+  },
+  "media": {
+    "hero_background": {
+      "url": "https://images.pexels.com/photos/7862505/pexels-photo-7862505.jpeg",
+      "usage": "Use with a heavy black overlay (e.g., bg-black/60 to bg-black/80) to ensure text remains perfectly legible."
+    },
+    "placeholder_skins": [
+      {
+        "type": "knife",
+        "url": "https://images.unsplash.com/photo-1589728473894-4fb97b4dbb88"
+      },
+      {
+        "type": "knife_2",
+        "url": "https://images.unsplash.com/photo-1588597574944-5e581eeef359"
+      },
+      {
+        "type": "rifle",
+        "url": "https://images.pexels.com/photos/8390978/pexels-photo-8390978.jpeg"
+      },
+      {
+        "type": "rifle_2",
+        "url": "https://images.unsplash.com/photo-1482649671545-bc53dcf1ad7c"
+      }
+    ],
+    "instructions_to_main_agent": "Use the placeholder_skins URLs for rendering mock CS2 skins in the marketplace and inventory grids. DO NOT use generic placeholders like via.placeholder.com. Ensure you are writing .js files, NOT .tsx files. Use react-icons/fa for the Steam icon (FaSteam)."
+  },
+  "accessibility": {
+    "contrast": "Ensure text meets APCA standards. Do not use pure white text; use #E0E0E0. Rarity text must have text-shadow if placed over light backgrounds.",
+    "focus_states": "focus:outline-none focus:ring-2 focus:ring-[#E4AE39] focus:ring-offset-2 focus:ring-offset-[#0A0A0A]",
+    "test_ids": "All interactive and key informational elements MUST include a data-testid attribute using kebab-case (e.g., data-testid='steam-login-button')."
+  }
+}
