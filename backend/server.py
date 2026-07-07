@@ -214,6 +214,23 @@ async def skins_search(q: str = "", rarity: str = "", limit: int = 40):
     return {"items": items}
 
 
+@api.get("/skins/detail/{master_id}")
+async def skin_detail(master_id: str):
+    """Detailed info for a single skin + all current live listings of it."""
+    from skins_catalog import PRICE_RANGES
+    skin = await db.skins_master.find_one({"master_id": master_id}, {"_id": 0})
+    if not skin:
+        raise HTTPException(404, "Skin not found")
+    listings = await db.listings.find(
+        {"skin_name": skin["name"], "status": "active"},
+        {"_id": 0},
+    ).sort([("price_usd", 1)]).to_list(200)
+    lo, hi = PRICE_RANGES.get(skin.get("rarity"), (1.0, 10.0))
+    skin["reference_price_usd"] = round((lo + hi) / 2, 2)
+    skin["price_range_usd"] = {"low": lo, "high": hi}
+    return {"skin": skin, "listings": listings, "listings_count": len(listings)}
+
+
 @api.get("/skins/all")
 async def skins_all(
     search: str = "",

@@ -53,7 +53,7 @@ export default function Navbar() {
         <nav className="hidden md:flex items-center gap-1">
           <NavLink to="/market" testid="nav-market">Market</NavLink>
           <NavLink to="/live" testid="nav-live">Live Listings</NavLink>
-          {user && <NavLink to="/inventory" testid="nav-inventory">Inventory</NavLink>}
+          <NavLink to="/inventory" testid="nav-inventory">Your Inventory</NavLink>
           {user && <NavLink to="/orders" testid="nav-orders">Orders</NavLink>}
         </nav>
 

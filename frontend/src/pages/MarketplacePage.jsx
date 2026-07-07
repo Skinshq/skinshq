@@ -105,7 +105,7 @@ export default function MarketplacePage() {
             {items.map((s, i) => (
               <Link
                 key={s.master_id}
-                to={`/live?skin=${encodeURIComponent(s.name)}`}
+                to={`/skin/${encodeURIComponent(s.master_id)}`}
                 data-testid={`catalog-${s.master_id}`}
                 className={`skin-card group bg-[#121212] rounded-sm overflow-hidden rarity-border-${s.rarity} flex flex-col fade-up`}
                 style={{ animationDelay: `${Math.min(i * 20, 400)}ms` }}

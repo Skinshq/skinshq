@@ -85,12 +85,20 @@ export default function InventoryPage() {
 
   if (!user) {
     return (
-      <div className="max-w-7xl mx-auto px-6 lg:px-12 py-24 text-center">
-        <h2 className="font-display font-black text-3xl mb-4">Sign in to see your inventory</h2>
+      <div className="max-w-3xl mx-auto px-6 py-24 text-center" data-testid="inventory-guest">
+        <div className="text-[11px] uppercase tracking-[0.3em] text-[#E4AE39] font-mono mb-3">
+          Your Inventory
+        </div>
+        <h2 className="font-display font-black text-3xl lg:text-4xl mb-4 tracking-tight">
+          Sign in with Steam to see your CS2 items
+        </h2>
+        <p className="text-[#8A8A8A] mb-8 max-w-lg mx-auto">
+          Once connected, we pull your CS2 (730) inventory directly from Steam — just like the in-game inventory — so you can list any skin for sale in one click.
+        </p>
         <button
           onClick={loginWithSteam}
           data-testid="inv-login-cta"
-          className="bg-[#171A21] hover:bg-[#2A475E] border border-[#2A475E] px-6 py-3 rounded-sm"
+          className="bg-[#171A21] hover:bg-[#2A475E] border border-[#2A475E] px-6 py-3 rounded-sm inline-flex items-center gap-2"
         >
           Sign in with Steam
         </button>
@@ -102,10 +110,10 @@ export default function InventoryPage() {
     <div className="max-w-7xl mx-auto px-6 lg:px-12 py-10">
       <div className="mb-8">
         <div className="text-[11px] uppercase tracking-[0.3em] text-[#E4AE39] font-mono mb-2">
-          Your CS2 Inventory
+          Your Inventory
         </div>
         <h1 className="font-display font-black text-3xl lg:text-4xl tracking-tight">
-          {user.display_name}'s vault
+          {user.display_name}'s CS2 vault
         </h1>
         <div className="text-sm text-[#8A8A8A] mt-2 font-mono">
           Steam ID: {user.steam_id}
