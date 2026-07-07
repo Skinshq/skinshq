@@ -1,0 +1,35 @@
+{
+  "summary": "Backend smoke test for CS2 Marketplace API. 24/25 checks passed. Only failure is Stripe checkout using the placeholder key 'sk_test_emergent' — Stripe API rejects it as invalid. Per test brief, this is a known configuration issue to report separately, not an app bug. Steam interactive OpenID login not automatable — verified redirect only.",
+  "tested_scope": ["backend", "auth", "integration"],
+  "passed": [
+    "GET /api/ returns metadata with rarities",
+    "GET /api/marketplace/listings returns 39 seeded items with all required fields",
+    "All filters work: rarity=covert(6), weapon_type=Rifle(14), wear=Factory New(10), min/max_price, search=AK-47(7), sort=price_desc ordering verified",
+    "GET /api/marketplace/listings/{id} valid returns item; invalid returns 404",
+    "GET /api/fx/rates returns base=USD with EUR/INR/JPY/GBP; two rapid calls return same 'updated' timestamp (cache works)",
+    "GET /api/auth/steam/login returns 307 redirect to steamcommunity.com/openid/login with correct openid.mode/ns/return_to params",
+    "Unauthenticated /auth/me, /inventory/cs2, POST /marketplace/listings, POST /checkout all return 401",
+    "JWT-authenticated flow: /auth/me returns user, POST listing creates with seller_id, GET /my/listings includes it, DELETE own listing succeeds",
+    "DELETE another user's listing returns 403",
+    "POST /checkout on own listing returns 400 'Cannot buy your own listing'"
+  ],
+  "failed": [
+    {
+      "area": "Stripe checkout",
+      "issue": "POST /api/checkout/{listing_id} returns 500 'Invalid API Key provided: sk_test_****gent'. The STRIPE_API_KEY in backend/.env is 'sk_test_emergent' which is not a valid Stripe test key.",
+      "evidence": "status=500 detail='Payment provider error: Invalid API Key provided: sk_test_****gent'. Confirmed by inspecting /app/backend/.env which contains STRIPE_API_KEY=\"sk_test_emergent\".",
+      "priority": "HIGH"
+    }
+  ],
+  "action_items": [
+    "Replace STRIPE_API_KEY in /app/backend/.env with a real Stripe test key (sk_test_...) to enable checkout flow. Once fixed, re-test POST /api/checkout/{listing_id} and GET /api/orders/{order_id}/status (session_id/checkout_url/order_id and order stored with status='pending' logic is already implemented correctly, just blocked by the placeholder key)."
+  ],
+  "success_rate": {"backend": "96%", "frontend": "not tested (backend-only request)"},
+  "retest_needed": true,
+  "full_testing_deferred": true,
+  "notes": {
+    "mocked_flows": "Escrow/trade release via POST /api/orders/{order_id}/confirm-trade is MOCKED — no real Steam trade offers. Not exercised because it requires a paid order which requires working Stripe.",
+    "steam_openid": "Interactive Steam login flow cannot be automated; only redirect properties verified.",
+    "test_credentials_md": "Present at /app/memory/test_credentials.md (not used — auth via minted JWT + Mongo user insert as instructed)."
+  }
+}
