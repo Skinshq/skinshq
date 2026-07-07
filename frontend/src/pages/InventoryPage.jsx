@@ -18,28 +18,30 @@ export default function InventoryPage() {
   const [listing, setListing] = useState(false);
   const [myListings, setMyListings] = useState([]);
   const [verifyOpen, setVerifyOpen] = useState(false);
-  const [verifyCode, setVerifyCode] = useState(null);
+  const [verifyStep, setVerifyStep] = useState(1);
+  const [email, setEmail] = useState("");
+  const [otp, setOtp] = useState("");
   const [verifyBusy, setVerifyBusy] = useState(false);
 
   const { refresh: refreshAuth } = useAuth();
-  const startVerify = async () => {
+  const startVerify = () => { setVerifyStep(1); setVerifyOpen(true); };
+  const sendCode = async () => {
     setVerifyBusy(true);
     try {
-      const { data } = await api.post("/auth/verify/init");
-      if (data.already_verified) { toast.success("Already verified"); await refreshAuth(); return; }
-      setVerifyCode(data);
-      setVerifyOpen(true);
-    } catch (e) { toast.error("Could not start verification"); }
+      const { data } = await api.post("/auth/email/init", { email });
+      toast.success(data.dev_hint || `Code sent to ${email}`);
+      setVerifyStep(2);
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed to send code"); }
     finally { setVerifyBusy(false); }
   };
-  const checkVerify = async () => {
+  const checkCode = async () => {
     setVerifyBusy(true);
     try {
-      await api.post("/auth/verify/check");
-      toast.success("Steam ownership verified!");
+      await api.post("/auth/email/check", { code: otp });
+      toast.success("Verified! You can now list and buy skins.");
       setVerifyOpen(false);
       await refreshAuth();
-    } catch (e) { toast.error(e?.response?.data?.detail || "Verification failed"); }
+    } catch (e) { toast.error(e?.response?.data?.detail || "Wrong code"); }
     finally { setVerifyBusy(false); }
   };
 
@@ -225,38 +227,41 @@ export default function InventoryPage() {
         </div>
       )}
 
-      {/* Verify ownership modal */}
+      {/* Email OTP verify modal */}
       <Dialog open={verifyOpen} onOpenChange={setVerifyOpen}>
         <DialogContent className="bg-[#121212] border border-white/10 max-w-md rounded-sm" data-testid="verify-modal">
           <DialogHeader>
-            <DialogTitle className="font-display tracking-tight">Verify Steam ownership</DialogTitle>
+            <DialogTitle className="font-display tracking-tight">
+              {verifyStep === 1 ? "Verify via email" : "Enter the 6-digit code"}
+            </DialogTitle>
           </DialogHeader>
-          {verifyCode && (
+          {verifyStep === 1 ? (
             <div className="space-y-4">
               <p className="text-xs text-[#8A8A8A] leading-relaxed">
-                Prove you own this Steam account by placing the code below in your Steam profile's <strong className="text-[#E0E0E0]">"Real Name"</strong> field. Then click Verify.
+                Enter your email — we'll send a 6-digit code. You'll need to confirm your email again before every high-value action (listing, purchase) for security.
               </p>
-              <div className="bg-[#0A0A0A] border border-[#E4AE39]/40 rounded-sm p-4 text-center">
-                <div className="text-[10px] uppercase tracking-widest text-[#555] mb-1">Your code</div>
-                <div className="font-mono text-2xl font-black text-[#E4AE39]" data-testid="verify-code">
-                  {verifyCode.code}
-                </div>
-              </div>
-              <ol className="text-xs text-[#8A8A8A] space-y-2 list-decimal pl-4">
-                <li>
-                  Open{" "}
-                  <a href={verifyCode.profile_edit_url} target="_blank" rel="noreferrer" className="text-[#E4AE39] underline">
-                    your Steam profile editor
-                  </a>
-                </li>
-                <li>Paste the code into the "Real Name" field and Save</li>
-                <li>Click Verify below (you can remove the code after)</li>
-              </ol>
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+                data-testid="verify-email-input" placeholder="you@example.com"
+                className="w-full bg-[#0A0A0A] border border-white/10 focus:border-[#E4AE39] rounded-sm px-3 py-3 text-sm outline-none" />
               <div className="flex gap-2 justify-end">
-                <button onClick={() => setVerifyOpen(false)}
-                  className="px-4 py-2 text-sm text-[#8A8A8A] hover:text-white">Later</button>
-                <button onClick={checkVerify} disabled={verifyBusy}
-                  data-testid="verify-check"
+                <button onClick={() => setVerifyOpen(false)} className="px-4 py-2 text-sm text-[#8A8A8A]">Cancel</button>
+                <button onClick={sendCode} disabled={verifyBusy || !email}
+                  data-testid="send-code-btn"
+                  className="bg-[#E4AE39] hover:bg-[#F5C75A] text-[#0A0A0A] font-bold px-6 py-2 rounded-sm disabled:opacity-50">
+                  {verifyBusy ? "Sending…" : "Send code"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <p className="text-xs text-[#8A8A8A]">Code sent to <strong className="text-[#E0E0E0]">{email}</strong>. Enter it below (expires in 15 min).</p>
+              <input value={otp} onChange={(e) => setOtp(e.target.value)}
+                data-testid="verify-otp-input" placeholder="123456" maxLength={6}
+                className="w-full bg-[#0A0A0A] border border-white/10 focus:border-[#E4AE39] rounded-sm px-3 py-3 font-mono text-center text-2xl tracking-[0.5em] outline-none" />
+              <div className="flex gap-2 justify-between">
+                <button onClick={() => setVerifyStep(1)} className="text-xs text-[#8A8A8A] hover:text-white">← Change email</button>
+                <button onClick={checkCode} disabled={verifyBusy || otp.length !== 6}
+                  data-testid="verify-otp-btn"
                   className="bg-[#E4AE39] hover:bg-[#F5C75A] text-[#0A0A0A] font-bold px-6 py-2 rounded-sm disabled:opacity-50">
                   {verifyBusy ? "Checking…" : "Verify"}
                 </button>

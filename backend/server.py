@@ -279,6 +279,76 @@ async def require_verified(user=Depends(get_current_user)):
     return user
 
 
+import secrets
+
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "onboarding@resend.dev")
+
+
+async def send_email_code(to_email: str, code: str, purpose: str = "verify") -> bool:
+    """Send a 6-digit code via Resend. If no key configured, log the code (dev mode)."""
+    subject = f"SKIN.MRKT code: {code}"
+    html = f"""<div style='font-family:sans-serif;background:#0A0A0A;color:#E0E0E0;padding:32px;'>
+      <h2 style='color:#E4AE39;letter-spacing:-0.02em;'>Your SKIN.MRKT code</h2>
+      <div style='font-size:36px;font-family:monospace;font-weight:900;color:#E4AE39;letter-spacing:8px;
+                  background:#121212;padding:20px;text-align:center;border:1px solid #E4AE3940;margin:24px 0;'>{code}</div>
+      <p style='color:#8A8A8A;font-size:13px;'>This code is used to {purpose}. It expires in 15 minutes.
+      If you didn't request this, ignore this email.</p></div>"""
+    if not RESEND_API_KEY:
+        log.warning(f"[EMAIL DEV MODE] To={to_email} Code={code} (set RESEND_API_KEY to send real emails)")
+        return True
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.post("https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+                json={"from": EMAIL_FROM, "to": [to_email], "subject": subject, "html": html})
+        if r.status_code >= 300:
+            log.error(f"Resend send error {r.status_code}: {r.text}")
+            return False
+    except Exception as e:
+        log.error(f"Resend error: {e}")
+        return False
+    return True
+
+
+class EmailInit(BaseModel):
+    email: str
+
+class EmailCheck(BaseModel):
+    code: str
+
+
+@api.post("/auth/email/init")
+async def email_verify_init(payload: EmailInit, user=Depends(get_current_user)):
+    email = (payload.email or "").strip().lower()
+    if "@" not in email or len(email) < 5:
+        raise HTTPException(400, "Enter a valid email address")
+    code = "".join(secrets.choice("0123456789") for _ in range(6))
+    expires = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()
+    await db.users.update_one({"id": user["id"]},
+        {"$set": {"email": email, "email_code": code, "email_code_expires": expires}})
+    sent = await send_email_code(email, code, "verify Steam account ownership")
+    return {"sent": sent, "email": email,
+            "dev_hint": "Check backend logs for the code (RESEND_API_KEY not set)" if not RESEND_API_KEY else None}
+
+
+@api.post("/auth/email/check")
+async def email_verify_check(payload: EmailCheck, user=Depends(get_current_user)):
+    code = (payload.code or "").strip()
+    expected = user.get("email_code")
+    exp = user.get("email_code_expires")
+    if not expected:
+        raise HTTPException(400, "Request a code first via /auth/email/init")
+    if exp and datetime.now(timezone.utc) > datetime.fromisoformat(exp):
+        raise HTTPException(400, "Code expired — request a new one")
+    if code != expected:
+        raise HTTPException(400, "Wrong code")
+    await db.users.update_one({"id": user["id"]},
+        {"$set": {"is_verified": True, "email_verified": True},
+         "$unset": {"email_code": "", "email_code_expires": ""}})
+    return {"verified": True}
+
+
 @api.get("/auth/me")
 async def me(user=Depends(get_current_user)):
     return user
