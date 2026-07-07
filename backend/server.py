@@ -166,6 +166,8 @@ async def steam_callback(request: Request):
             "display_name": summary.get("personaname", f"Player {steam_id[-6:]}"),
             "avatar": summary.get("avatarfull"),
             "profile_url": summary.get("profileurl", f"https://steamcommunity.com/profiles/{steam_id}"),
+            "is_verified": True,
+            "auth_method": "steam_openid",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.users.insert_one(user.copy())
@@ -184,16 +186,17 @@ async def steam_callback(request: Request):
     return RedirectResponse(url=f"{FRONTEND_URL}/auth/callback?token={token}")
 
 
+import secrets
+
 class SteamIdLogin(BaseModel):
     steam_id: str
 
 
 @api.post("/auth/steamid")
 async def login_with_steamid(payload: SteamIdLogin):
-    """Fallback login: accept SteamID64 directly (no Steam OpenID required).
-    Useful when the user's network cannot reach steamcommunity.com.
-    Note: identity is NOT cryptographically verified — user is responsible for entering their own ID.
-    The inventory endpoint will only return items if the Steam inventory is Public.
+    """Fallback login: accept SteamID64 directly. Creates an UNVERIFIED session.
+    Unverified users can browse but cannot list skins or purchase until they
+    prove Steam profile ownership via /auth/verify/init + /auth/verify/check.
     """
     steam_id = (payload.steam_id or "").strip()
     if not steam_id.isdigit() or len(steam_id) != 17 or not steam_id.startswith("7656"):
@@ -208,6 +211,8 @@ async def login_with_steamid(payload: SteamIdLogin):
             "display_name": summary.get("personaname", f"Player {steam_id[-6:]}"),
             "avatar": summary.get("avatarfull"),
             "profile_url": summary.get("profileurl", f"https://steamcommunity.com/profiles/{steam_id}"),
+            "is_verified": False,
+            "auth_method": "steamid_manual",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.users.insert_one(user.copy())
@@ -215,6 +220,63 @@ async def login_with_steamid(payload: SteamIdLogin):
 
     token = make_jwt(user["id"], steam_id)
     return {"token": token, "user": user}
+
+
+@api.post("/auth/verify/init")
+async def verify_init(user=Depends(get_current_user)):
+    """Generate a short code the user must add to their Steam profile 'Real Name' field."""
+    if user.get("is_verified"):
+        return {"already_verified": True}
+    code = "SKMK-" + secrets.token_hex(3).upper()
+    expires = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()
+    await db.users.update_one({"id": user["id"]},
+        {"$set": {"verify_code": code, "verify_expires": expires}})
+    return {
+        "code": code,
+        "expires_at": expires,
+        "instructions": (
+            "1) Go to your Steam profile → Edit Profile → paste this code into the "
+            "'Real Name' field. 2) Save. 3) Come back and click Verify."
+        ),
+        "profile_edit_url": "https://steamcommunity.com/my/edit/info",
+    }
+
+
+@api.post("/auth/verify/check")
+async def verify_check(user=Depends(get_current_user)):
+    """Verify by fetching the public Steam profile XML and checking for the code."""
+    if user.get("is_verified"):
+        return {"verified": True}
+    code = user.get("verify_code")
+    expires = user.get("verify_expires")
+    if not code:
+        raise HTTPException(400, "Call /auth/verify/init first")
+    if expires and datetime.now(timezone.utc) > datetime.fromisoformat(expires):
+        raise HTTPException(400, "Verification code expired — request a new one")
+
+    # Fetch public Steam profile XML (no API key required)
+    url = f"https://steamcommunity.com/profiles/{user['steam_id']}?xml=1"
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as c:
+            resp = await c.get(url, headers={"User-Agent": "Mozilla/5.0"})
+        text = resp.text if resp.status_code == 200 else ""
+    except Exception as e:
+        log.error(f"Steam profile fetch error: {e}")
+        raise HTTPException(502, "Could not reach Steam to verify. Try again.")
+
+    if code not in text:
+        raise HTTPException(400, "Code not found in your Steam profile Real Name. "
+                                  "Make sure you saved the change and the profile is public.")
+    await db.users.update_one({"id": user["id"]},
+        {"$set": {"is_verified": True},
+         "$unset": {"verify_code": "", "verify_expires": ""}})
+    return {"verified": True}
+
+
+async def require_verified(user=Depends(get_current_user)):
+    if not user.get("is_verified"):
+        raise HTTPException(403, "Account not verified. Verify Steam profile ownership first.")
+    return user
 
 
 @api.get("/auth/me")
@@ -344,7 +406,7 @@ async def get_listing(listing_id: str):
 
 
 @api.post("/marketplace/listings")
-async def create_listing(payload: ListingCreate, user=Depends(get_current_user)):
+async def create_listing(payload: ListingCreate, user=Depends(require_verified)):
     listing = {
         "id": str(uuid.uuid4()),
         "skin_name": payload.skin_name,
@@ -388,7 +450,7 @@ async def my_listings(user=Depends(get_current_user)):
 # ---------------- Stripe Checkout ----------------
 
 @api.post("/checkout/{listing_id}")
-async def create_checkout(listing_id: str, request: Request, user=Depends(get_current_user)):
+async def create_checkout(listing_id: str, request: Request, user=Depends(require_verified)):
     listing = await db.listings.find_one({"id": listing_id}, {"_id": 0})
     if not listing:
         raise HTTPException(404, "Listing not found")

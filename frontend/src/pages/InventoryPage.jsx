@@ -5,6 +5,7 @@ import api from "../lib/api";
 import SkinCard from "../components/SkinCard";
 import { useAuth } from "../context/AuthContext";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import { ShieldCheck, ShieldAlert } from "lucide-react";
 
 export default function InventoryPage() {
   const { user, loginWithSteam } = useAuth();
@@ -16,6 +17,31 @@ export default function InventoryPage() {
   const [price, setPrice] = useState("");
   const [listing, setListing] = useState(false);
   const [myListings, setMyListings] = useState([]);
+  const [verifyOpen, setVerifyOpen] = useState(false);
+  const [verifyCode, setVerifyCode] = useState(null);
+  const [verifyBusy, setVerifyBusy] = useState(false);
+
+  const { refresh: refreshAuth } = useAuth();
+  const startVerify = async () => {
+    setVerifyBusy(true);
+    try {
+      const { data } = await api.post("/auth/verify/init");
+      if (data.already_verified) { toast.success("Already verified"); await refreshAuth(); return; }
+      setVerifyCode(data);
+      setVerifyOpen(true);
+    } catch (e) { toast.error("Could not start verification"); }
+    finally { setVerifyBusy(false); }
+  };
+  const checkVerify = async () => {
+    setVerifyBusy(true);
+    try {
+      await api.post("/auth/verify/check");
+      toast.success("Steam ownership verified!");
+      setVerifyOpen(false);
+      await refreshAuth();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Verification failed"); }
+    finally { setVerifyBusy(false); }
+  };
 
   const load = async () => {
     if (!user) return;
@@ -120,6 +146,25 @@ export default function InventoryPage() {
         </div>
       </div>
 
+      {!user.is_verified && (
+        <div className="mb-6 bg-[#EB4B4B]/10 border border-[#EB4B4B]/40 rounded-sm p-4 flex flex-wrap items-center gap-4" data-testid="verify-banner">
+          <ShieldAlert className="w-6 h-6 text-[#EB4B4B] flex-shrink-0" />
+          <div className="flex-1 min-w-[240px] text-sm">
+            <strong className="text-[#E0E0E0]">Steam ownership not verified.</strong>{" "}
+            <span className="text-[#8A8A8A]">You cannot list skins or purchase until you prove ownership of this Steam account. Takes 30 seconds — no API key needed.</span>
+          </div>
+          <button onClick={startVerify} disabled={verifyBusy} data-testid="verify-cta"
+            className="bg-[#E4AE39] hover:bg-[#F5C75A] text-[#0A0A0A] font-bold px-4 py-2 rounded-sm text-xs uppercase tracking-widest disabled:opacity-50">
+            {verifyBusy ? "…" : "Verify now"}
+          </button>
+        </div>
+      )}
+      {user.is_verified && (
+        <div className="mb-6 flex items-center gap-2 text-xs text-[#2ECC71]" data-testid="verified-badge">
+          <ShieldCheck className="w-4 h-4" /> Steam ownership verified
+        </div>
+      )}
+
       {isDemo && (
         <div className="mb-6 bg-[#E4AE39]/10 border border-[#E4AE39]/30 rounded-sm p-4 flex items-start gap-3" data-testid="demo-banner">
           <AlertTriangle className="w-5 h-5 text-[#E4AE39] flex-shrink-0 mt-0.5" />
@@ -179,6 +224,47 @@ export default function InventoryPage() {
           ))}
         </div>
       )}
+
+      {/* Verify ownership modal */}
+      <Dialog open={verifyOpen} onOpenChange={setVerifyOpen}>
+        <DialogContent className="bg-[#121212] border border-white/10 max-w-md rounded-sm" data-testid="verify-modal">
+          <DialogHeader>
+            <DialogTitle className="font-display tracking-tight">Verify Steam ownership</DialogTitle>
+          </DialogHeader>
+          {verifyCode && (
+            <div className="space-y-4">
+              <p className="text-xs text-[#8A8A8A] leading-relaxed">
+                Prove you own this Steam account by placing the code below in your Steam profile's <strong className="text-[#E0E0E0]">"Real Name"</strong> field. Then click Verify.
+              </p>
+              <div className="bg-[#0A0A0A] border border-[#E4AE39]/40 rounded-sm p-4 text-center">
+                <div className="text-[10px] uppercase tracking-widest text-[#555] mb-1">Your code</div>
+                <div className="font-mono text-2xl font-black text-[#E4AE39]" data-testid="verify-code">
+                  {verifyCode.code}
+                </div>
+              </div>
+              <ol className="text-xs text-[#8A8A8A] space-y-2 list-decimal pl-4">
+                <li>
+                  Open{" "}
+                  <a href={verifyCode.profile_edit_url} target="_blank" rel="noreferrer" className="text-[#E4AE39] underline">
+                    your Steam profile editor
+                  </a>
+                </li>
+                <li>Paste the code into the "Real Name" field and Save</li>
+                <li>Click Verify below (you can remove the code after)</li>
+              </ol>
+              <div className="flex gap-2 justify-end">
+                <button onClick={() => setVerifyOpen(false)}
+                  className="px-4 py-2 text-sm text-[#8A8A8A] hover:text-white">Later</button>
+                <button onClick={checkVerify} disabled={verifyBusy}
+                  data-testid="verify-check"
+                  className="bg-[#E4AE39] hover:bg-[#F5C75A] text-[#0A0A0A] font-bold px-6 py-2 rounded-sm disabled:opacity-50">
+                  {verifyBusy ? "Checking…" : "Verify"}
+                </button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Listing modal */}
       <Dialog open={!!selected} onOpenChange={(o) => !o && setSelected(null)}>
