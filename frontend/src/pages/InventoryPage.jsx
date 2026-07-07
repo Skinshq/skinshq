@@ -148,22 +148,18 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      {!user.is_verified && (
-        <div className="mb-6 bg-[#EB4B4B]/10 border border-[#EB4B4B]/40 rounded-sm p-4 flex flex-wrap items-center gap-4" data-testid="verify-banner">
-          <ShieldAlert className="w-6 h-6 text-[#EB4B4B] flex-shrink-0" />
+      {user.auth_method !== "steam_openid" && (
+        <div className="mb-6 bg-[#4B69FF]/10 border border-[#4B69FF]/40 rounded-sm p-4 flex flex-wrap items-center gap-4" data-testid="readonly-banner">
+          <ShieldAlert className="w-6 h-6 text-[#4B69FF] flex-shrink-0" />
           <div className="flex-1 min-w-[240px] text-sm">
-            <strong className="text-[#E0E0E0]">Steam ownership not verified.</strong>{" "}
-            <span className="text-[#8A8A8A]">You cannot list skins or purchase until you prove ownership of this Steam account. Takes 30 seconds — no API key needed.</span>
+            <strong className="text-[#E0E0E0]">Read-only mode.</strong>{" "}
+            <span className="text-[#8A8A8A]">You signed in with SteamID64 which only lets you view your inventory. To list or buy skins, sign out and sign in again using <strong className="text-[#E0E0E0]">Steam OpenID</strong> (the recommended option).</span>
           </div>
-          <button onClick={startVerify} disabled={verifyBusy} data-testid="verify-cta"
-            className="bg-[#E4AE39] hover:bg-[#F5C75A] text-[#0A0A0A] font-bold px-4 py-2 rounded-sm text-xs uppercase tracking-widest disabled:opacity-50">
-            {verifyBusy ? "…" : "Verify now"}
-          </button>
         </div>
       )}
-      {user.is_verified && (
+      {user.auth_method === "steam_openid" && (
         <div className="mb-6 flex items-center gap-2 text-xs text-[#2ECC71]" data-testid="verified-badge">
-          <ShieldCheck className="w-4 h-4" /> Steam ownership verified
+          <ShieldCheck className="w-4 h-4" /> Steam verified — you can list and purchase
         </div>
       )}
 

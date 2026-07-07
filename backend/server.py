@@ -274,8 +274,10 @@ async def verify_check(user=Depends(get_current_user)):
 
 
 async def require_verified(user=Depends(get_current_user)):
-    if not user.get("is_verified"):
-        raise HTTPException(403, "Account not verified. Verify Steam profile ownership first.")
+    """Only Steam OpenID (cryptographically verified) users can list or purchase.
+    SteamID64 fallback users are read-only — they can view inventory but not transact."""
+    if user.get("auth_method") != "steam_openid":
+        raise HTTPException(403, "Read-only mode. Sign in with Steam OpenID to list or purchase skins.")
     return user
 
 
