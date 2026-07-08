@@ -41,6 +41,14 @@ User wants a marketplace to buy/sell CS2 skins where users login via Steam ID, s
 - Background asyncio scheduler refreshes prices every 6h, defaults to
   top-6000 most-listed items per run (fast + rate-limit friendly)
 
+## Float Value Display (Jul 2026)
+- Reusable `FloatBar` component with 5 color-coded wear-tier segments
+  (FN green → BS red), a "dim" mask outside the skin's min_float/max_float
+  range, and an optional value marker for a specific listing's float
+- Market cards now show a mini float bar + range labels
+- Skin detail page has a full-width labelled float range panel + a mini
+  bar with value marker in each live listing row
+
 ## Endpoints
 - GET /api/auth/steam/login, /api/auth/steam/callback, /api/auth/me
 - GET /api/inventory/cs2

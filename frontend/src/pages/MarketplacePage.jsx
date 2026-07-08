@@ -5,6 +5,7 @@ import { Link } from "react-router-dom";
 import api from "../lib/api";
 import { useCurrency } from "../context/CurrencyContext";
 import { timeAgo } from "../lib/utils";
+import FloatBar from "../components/FloatBar";
 
 const RARITIES = [
   { key: "consumer", label: "Consumer" },
@@ -127,6 +128,16 @@ export default function MarketplacePage() {
                 <div className="p-3 flex flex-col gap-1 flex-1">
                   <div className="text-[10px] uppercase tracking-[0.15em] text-[#555] font-mono">{s.weapon}</div>
                   <div className="text-sm font-medium text-[#E0E0E0] leading-tight line-clamp-2 min-h-[2.5rem]">{s.name}</div>
+                  {(s.min_float != null || s.max_float != null) && (
+                    <div className="mt-1">
+                      <FloatBar min={Number(s.min_float) || 0} max={Number(s.max_float) || 1} />
+                      <div className="flex items-center justify-between text-[9px] font-mono text-[#555] mt-0.5">
+                        <span>{Number(s.min_float ?? 0).toFixed(2)}</span>
+                        <span className="text-[#777]">float</span>
+                        <span>{Number(s.max_float ?? 1).toFixed(2)}</span>
+                      </div>
+                    </div>
+                  )}
                   <div className="mt-auto pt-2 border-t border-white/5">
                     {s.market_price_usd != null ? (
                       <>

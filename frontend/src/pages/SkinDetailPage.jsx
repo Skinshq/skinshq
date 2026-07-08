@@ -6,6 +6,7 @@ import api from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { useCurrency } from "../context/CurrencyContext";
 import { timeAgo } from "../lib/utils";
+import FloatBar, { tierForFloat } from "../components/FloatBar";
 
 const rarityLabel = {
   consumer: "Consumer Grade", industrial: "Industrial Grade", milspec: "Mil-Spec Grade",
@@ -82,6 +83,27 @@ export default function SkinDetailPage() {
             <Meta label="Min Float" value={skin.min_float != null ? Number(skin.min_float).toFixed(4) : "—"} mono />
             <Meta label="Max Float" value={skin.max_float != null ? Number(skin.max_float).toFixed(4) : "—"} mono />
           </div>
+
+          {(skin.min_float != null || skin.max_float != null) && (
+            <div className="mt-6 bg-[#121212] border border-white/10 rounded-sm p-5">
+              <div className="flex items-center justify-between text-[10px] uppercase tracking-widest text-[#555] mb-3">
+                <span>Float range</span>
+                <span className="font-mono">
+                  {Number(skin.min_float ?? 0).toFixed(4)} — {Number(skin.max_float ?? 1).toFixed(4)}
+                </span>
+              </div>
+              <FloatBar
+                min={Number(skin.min_float) || 0}
+                max={Number(skin.max_float) || 1}
+                size="md"
+                showLabels
+              />
+              <div className="mt-4 text-[10px] font-mono text-[#555] leading-relaxed">
+                Represents the float range this skin can spawn in (0.00 = pristine → 1.00 = destroyed).
+                Colored segments mark the wear-tier boundaries.
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Info panel */}
@@ -219,7 +241,16 @@ export default function SkinDetailPage() {
                     </td>
                     <td className="py-3 px-2 text-[#E0E0E0]">{l.wear || "—"}</td>
                     <td className="py-3 px-2 font-mono text-[#8A8A8A]">
-                      {l.float_value != null ? Number(l.float_value).toFixed(4) : "—"}
+                      {l.float_value != null ? (
+                        <div className="flex flex-col gap-1 min-w-[110px]">
+                          <span>{Number(l.float_value).toFixed(4)}</span>
+                          <FloatBar
+                            min={Number(skin.min_float) || 0}
+                            max={Number(skin.max_float) || 1}
+                            value={Number(l.float_value)}
+                          />
+                        </div>
+                      ) : "—"}
                     </td>
                     <td className="py-3 px-2 text-right font-mono font-bold text-[#E4AE39]">
                       {format(l.price_usd)}
