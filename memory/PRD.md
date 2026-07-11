@@ -41,6 +41,26 @@ User wants a marketplace to buy/sell CS2 skins where users login via Steam ID, s
 - Background asyncio scheduler refreshes prices every 6h, defaults to
   top-6000 most-listed items per run (fast + rate-limit friendly)
 
+## Category Sidebar + Containers (Jul 2026)
+- Left-side popup/sidebar (`CategorySidebar.jsx`) with three groups:
+  Weapons, Melee & Gear, Containers. Persistent column on desktop,
+  slide-out drawer on mobile.
+- Each category shows a react-icons/gi icon + item count. Click filters
+  the marketplace to that type.
+- Extended `skins_catalog.py` to fetch `crates.json` from ByMykel too —
+  480 containers now in the master catalog (42 weapon Cases, 99 Sticker
+  Capsules, 139 Autograph Capsules, 13 Music Kit Boxes, 7 Patch Capsules,
+  4 Pins Capsules, 3 Graffiti Boxes, 150 Souvenir Packages, 14 Souvenir
+  Highlights).
+- Fixed weapon-type detection: snipers now split from rifles by weapon
+  name (AWP/SSG 08/G3SG1/SCAR-20), shotguns split from machineguns
+  (Nova/XM1014/Sawed-Off/MAG-7 vs M249/Negev), and gloves no longer
+  mis-classified as knives (the ★-prefix heuristic used to hit both).
+- New endpoint `GET /api/skins/categories` returns the sidebar structure
+  with per-type counts.
+- `GET /api/skins/all` now accepts an additional `category` param
+  ("weapon" or "container").
+
 ## Live Skinport Prices (Jul 2026)
 - New `skinport_sync.py` uses Skinport's free public API
   (`https://api.skinport.com/v1/items?app_id=730&currency=USD`), no key needed

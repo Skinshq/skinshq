@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { Search, X, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, X, ChevronLeft, ChevronRight, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import api from "../lib/api";
 import { useCurrency } from "../context/CurrencyContext";
 import { timeAgo } from "../lib/utils";
 import FloatBar from "../components/FloatBar";
+import CategorySidebar from "../components/CategorySidebar";
 
 const RARITIES = [
   { key: "consumer", label: "Consumer" },
@@ -16,7 +17,6 @@ const RARITIES = [
   { key: "covert", label: "Covert" },
   { key: "contraband", label: "★ Rare Special" },
 ];
-const TYPES = ["Rifle", "Sniper Rifle", "Pistol", "Knife", "SMG", "Shotgun", "Machinegun", "Gloves"];
 const rarityLabel = { consumer: "Consumer", industrial: "Industrial", milspec: "Mil-Spec", restricted: "Restricted", classified: "Classified", covert: "Covert", contraband: "★ Extraordinary" };
 
 export default function MarketplacePage() {
@@ -29,6 +29,7 @@ export default function MarketplacePage() {
   const [wtype, setWtype] = useState("");
   const [sort, setSort] = useState("name_asc");
   const [page, setPage] = useState(1);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const pageSize = 60;
 
   const load = async () => {
@@ -52,14 +53,36 @@ export default function MarketplacePage() {
   const activeFilters = [rarity, wtype].filter(Boolean).length;
 
   return (
-    <div className="max-w-7xl mx-auto px-6 lg:px-12 py-10">
-      <div className="mb-8">
-        <div className="text-[11px] uppercase tracking-[0.3em] text-[#E4AE39] font-mono mb-2">Full Catalog</div>
-        <h1 className="font-display font-black text-3xl lg:text-4xl tracking-tight">All CS2 skins</h1>
-        <div className="text-sm text-[#8A8A8A] mt-2">
-          Reference prices for every skin in Counter-Strike 2. Click any skin to see live listings from sellers.
-          <span className="ml-2 text-[#E4AE39] font-mono">{total.toLocaleString()} skins</span>
+    <div className="flex">
+      <CategorySidebar
+        selected={wtype}
+        onSelect={(t) => setWtype(t)}
+        isOpen={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+      />
+      <div className="flex-1 max-w-7xl mx-auto px-6 lg:px-12 py-10">
+      <div className="mb-8 flex items-start justify-between gap-4">
+        <div>
+          <div className="text-[11px] uppercase tracking-[0.3em] text-[#E4AE39] font-mono mb-2">Full Catalog</div>
+          <h1 className="font-display font-black text-3xl lg:text-4xl tracking-tight">
+            {wtype || "All CS2 items"}
+          </h1>
+          <div className="text-sm text-[#8A8A8A] mt-2">
+            {wtype
+              ? <>Browse every <span className="text-[#E0E0E0]">{wtype}</span> — live Skinport prices.</>
+              : "Reference prices for every skin, case & capsule in Counter-Strike 2. Click any item to see live listings from sellers."}
+            <span className="ml-2 text-[#E4AE39] font-mono">{total.toLocaleString()} items</span>
+          </div>
         </div>
+        <button
+          type="button"
+          onClick={() => setDrawerOpen(true)}
+          data-testid="open-drawer"
+          className="lg:hidden flex items-center gap-2 bg-[#121212] border border-white/10 hover:border-[#E4AE39]/50 px-3 py-2 rounded-sm text-xs uppercase tracking-widest"
+        >
+          <SlidersHorizontal className="w-3.5 h-3.5" />
+          Categories
+        </button>
       </div>
 
       <form onSubmit={(e) => { e.preventDefault(); load(); }} className="mb-8 flex flex-wrap gap-3 items-center">
@@ -74,11 +97,6 @@ export default function MarketplacePage() {
           className="bg-[#121212] border border-white/10 rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-[#E4AE39]">
           <option value="">Rarity: All</option>
           {RARITIES.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
-        </select>
-        <select value={wtype} onChange={(e) => setWtype(e.target.value)} data-testid="filter-type"
-          className="bg-[#121212] border border-white/10 rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-[#E4AE39]">
-          <option value="">Type: All</option>
-          {TYPES.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
         <select value={sort} onChange={(e) => setSort(e.target.value)} data-testid="sort-select"
           className="bg-[#121212] border border-white/10 rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-[#E4AE39]">
@@ -179,6 +197,7 @@ export default function MarketplacePage() {
           </div>
         </>
       )}
+      </div>
     </div>
   );
 }

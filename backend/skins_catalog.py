@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timezone
 
 SKINS_API_URL = "https://cdn.jsdelivr.net/gh/ByMykel/CSGO-API@main/public/api/en/skins.json"
+CRATES_API_URL = "https://cdn.jsdelivr.net/gh/ByMykel/CSGO-API@main/public/api/en/crates.json"
 
 RARITIES = {
     "consumer": "#B0C3D9",
@@ -71,26 +72,90 @@ async def fetch_skins_master() -> list[dict]:
         if not image or not weapon:
             continue
 
-        # Map category to our type
-        type_ = "Rifle"
+        # Map category → our type. ByMykel lumps snipers with rifles and
+        # shotguns with machineguns ("Heavy"), so we split by weapon name.
+        SNIPER_WEAPONS = {"AWP", "SSG 08", "G3SG1", "SCAR-20"}
+        SHOTGUN_WEAPONS = {"Nova", "XM1014", "Sawed-Off", "MAG-7"}
         cat_lower = category.lower()
-        if "pistol" in cat_lower: type_ = "Pistol"
-        elif "sniper" in cat_lower: type_ = "Sniper Rifle"
-        elif "smg" in cat_lower: type_ = "SMG"
-        elif "shotgun" in cat_lower: type_ = "Shotgun"
-        elif "machinegun" in cat_lower or "heavy" in cat_lower: type_ = "Machinegun"
-        elif "knife" in cat_lower or s.get("name", "").startswith("★"): type_ = "Knife"
-        elif "glove" in cat_lower or "wraps" in s.get("name", "").lower(): type_ = "Gloves"
+        name = s.get("name", "") or ""
+        if "glove" in cat_lower or "wraps" in name.lower():
+            # IMPORTANT: check gloves BEFORE the ★-knife heuristic, because
+            # glove skins also start with ★ (e.g. ★ Hand Wraps | Spruce DDPAT)
+            type_ = "Gloves"
+        elif "knife" in cat_lower or name.startswith("★"):
+            type_ = "Knife"
+        elif "pistol" in cat_lower:
+            type_ = "Pistol"
+        elif "smg" in cat_lower:
+            type_ = "SMG"
+        elif "rifle" in cat_lower:
+            type_ = "Sniper Rifle" if weapon in SNIPER_WEAPONS else "Rifle"
+        elif "heavy" in cat_lower or "shotgun" in cat_lower or "machinegun" in cat_lower:
+            type_ = "Shotgun" if weapon in SHOTGUN_WEAPONS else "Machinegun"
+        else:
+            type_ = "Rifle"  # last-resort fallback
 
         catalog.append({
             "master_id": s.get("id"),
             "name": s.get("name"),
             "weapon": weapon,
             "type": type_,
+            "category": "weapon",
             "rarity": rarity,
             "image": image,
             "min_float": s.get("min_float"),
             "max_float": s.get("max_float"),
+        })
+    return catalog
+
+
+# ---- Container / case types (from ByMykel crates.json) ----
+
+# ByMykel crate.type → our public-facing type filter label
+CRATE_TYPE_MAP = {
+    "Case": "Case",
+    "Sticker Capsule": "Sticker Capsule",
+    "Autograph Capsule": "Autograph Capsule",
+    "Music Kit Box": "Music Kit Box",
+    "Patch Capsule": "Patch Capsule",
+    "Pins": "Pins Capsule",
+    "Graffiti": "Graffiti Box",
+    "Souvenir": "Souvenir Package",
+    "Souvenir Highlight": "Souvenir Highlight",
+}
+
+
+async def fetch_crates_master() -> list[dict]:
+    """Fetch containers (cases, capsules, souvenir packages, etc.) from ByMykel."""
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
+        resp = await c.get(CRATES_API_URL)
+    resp.raise_for_status()
+    data = resp.json()
+
+    catalog = []
+    for cr in data:
+        crate_type = cr.get("type")
+        if not crate_type:
+            continue  # skip generic gift packages, etc.
+        mapped_type = CRATE_TYPE_MAP.get(crate_type)
+        if not mapped_type:
+            continue
+        image = cr.get("image")
+        name = cr.get("market_hash_name") or cr.get("name")
+        if not image or not name:
+            continue
+
+        catalog.append({
+            "master_id": cr.get("id"),
+            "name": name,
+            "weapon": "",
+            "type": mapped_type,
+            "category": "container",
+            # Containers are technically Base Grade — reuse 'consumer' for UI colour
+            "rarity": "consumer",
+            "image": image,
+            "min_float": None,
+            "max_float": None,
         })
     return catalog
 

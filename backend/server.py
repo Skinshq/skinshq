@@ -18,7 +18,7 @@ from emergentintegrations.payments.stripe.checkout import (
 )
 
 from steam_auth import build_login_url, validate_openid, fetch_player_summary, fetch_cs2_inventory, demo_inventory
-from skins_catalog import build_seed_listings, fetch_skins_master, RARITIES
+from skins_catalog import build_seed_listings, fetch_skins_master, fetch_crates_master, RARITIES
 from price_sync import get_market_summary_for
 from skinport_sync import (
     sync_all_prices,
@@ -122,16 +122,20 @@ async def seed_catalog():
     if need_refresh:
         try:
             master = await fetch_skins_master()
-            if master:
+            crates = await fetch_crates_master()
+            combined = (master or []) + (crates or [])
+            if combined:
                 await db.skins_master.delete_many({})
-                await db.skins_master.insert_many(master)
+                await db.skins_master.insert_many(combined)
                 await db.skins_master_meta.update_one(
                     {"id": "meta"},
                     {"$set": {"id": "meta", "updated": datetime.now(timezone.utc).isoformat(),
-                              "count": len(master)}},
+                              "count": len(combined),
+                              "weapons_count": len(master or []),
+                              "crates_count": len(crates or [])}},
                     upsert=True,
                 )
-                log.info(f"Fetched {len(master)} skins from ByMykel API")
+                log.info(f"Fetched {len(master or [])} skins + {len(crates or [])} crates from ByMykel API")
         except Exception as e:
             log.error(f"Failed to fetch skins master: {e}")
 
@@ -429,11 +433,55 @@ async def skin_detail(master_id: str):
     return {"skin": skin, "listings": listings, "listings_count": len(listings)}
 
 
+@api.get("/skins/categories")
+async def skins_categories():
+    """Return the left-sidebar structure: groups → list of {type, count} for every
+    type of skin/container in the master catalog."""
+    pipeline = [
+        {"$group": {"_id": {"category": "$category", "type": "$type"}, "count": {"$sum": 1}}},
+    ]
+    raw = await db.skins_master.aggregate(pipeline).to_list(200)
+    # Order weapon types roughly as: primary → secondary → melee → gloves
+    WEAPON_ORDER = ["Rifle", "Sniper Rifle", "SMG", "Shotgun", "Machinegun", "Pistol", "Knife", "Gloves"]
+    CONTAINER_ORDER = ["Case", "Sticker Capsule", "Autograph Capsule", "Music Kit Box",
+                       "Patch Capsule", "Pins Capsule", "Graffiti Box",
+                       "Souvenir Package", "Souvenir Highlight"]
+
+    weapons, melee, containers, other = [], [], [], []
+    for row in raw:
+        t = (row["_id"] or {}).get("type") or "Other"
+        cat = (row["_id"] or {}).get("category") or "weapon"
+        entry = {"type": t, "count": row["count"], "category": cat}
+        if cat == "container":
+            containers.append(entry)
+        elif t in ("Knife", "Gloves"):
+            melee.append(entry)
+        elif t in WEAPON_ORDER:
+            weapons.append(entry)
+        else:
+            other.append(entry)
+
+    def _sort(rows, order):
+        idx = {t: i for i, t in enumerate(order)}
+        return sorted(rows, key=lambda r: (idx.get(r["type"], 999), r["type"]))
+
+    total_all = sum(r["count"] for r in weapons + melee + containers + other)
+    return {
+        "total": total_all,
+        "groups": [
+            {"key": "weapons",    "label": "Weapons",    "items": _sort(weapons,    WEAPON_ORDER)},
+            {"key": "melee",      "label": "Melee & Gear", "items": _sort(melee,    ["Knife", "Gloves"])},
+            {"key": "containers", "label": "Containers", "items": _sort(containers, CONTAINER_ORDER)},
+        ],
+    }
+
+
 @api.get("/skins/all")
 async def skins_all(
     search: str = "",
     rarity: Optional[str] = None,
     weapon_type: Optional[str] = None,
+    category: Optional[str] = None,
     sort: str = "name_asc",
     page: int = 1,
     page_size: int = 60,
@@ -446,6 +494,7 @@ async def skins_all(
     if search: q["name"] = {"$regex": search, "$options": "i"}
     if rarity: q["rarity"] = rarity
     if weapon_type: q["type"] = weapon_type
+    if category: q["category"] = category
 
     sort_map = {
         "name_asc": [("name", 1)],
