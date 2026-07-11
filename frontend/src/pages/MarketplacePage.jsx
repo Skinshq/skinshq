@@ -143,7 +143,7 @@ export default function MarketplacePage() {
                       <>
                         <div className="text-[10px] uppercase tracking-widest text-[#2ECC71] flex items-center gap-1">
                           <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#2ECC71] animate-pulse" />
-                          Steam Market
+                          Skinport
                         </div>
                         <div className="font-mono text-base font-bold text-[#E4AE39]">{format(s.market_price_usd)}</div>
                         <div className="text-[9px] text-[#555] font-mono mt-0.5">

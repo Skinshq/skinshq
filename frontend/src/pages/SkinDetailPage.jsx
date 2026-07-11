@@ -120,7 +120,7 @@ export default function SkinDetailPage() {
               <>
                 <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-[#2ECC71] mb-2">
                   <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#2ECC71] animate-pulse" />
-                  Steam Market <span className="text-[#555]">· live</span>
+                  Skinport <span className="text-[#555]">· live</span>
                 </div>
                 <div className="font-mono text-3xl font-black text-[#E4AE39]">
                   {format(skin.market_price_usd)}
@@ -151,7 +151,7 @@ export default function SkinDetailPage() {
           {Array.isArray(skin.market_variants) && skin.market_variants.length > 0 && (
             <div className="bg-[#0F0F0F] border border-white/10 rounded-sm p-4 mb-4">
               <div className="text-[10px] uppercase tracking-widest text-[#555] mb-3 font-mono">
-                Steam Market · price by wear
+                Skinport · price by wear
               </div>
               <div className="space-y-1.5">
                 {skin.market_variants

@@ -19,10 +19,10 @@ from emergentintegrations.payments.stripe.checkout import (
 
 from steam_auth import build_login_url, validate_openid, fetch_player_summary, fetch_cs2_inventory, demo_inventory
 from skins_catalog import build_seed_listings, fetch_skins_master, RARITIES
-from price_sync import (
+from price_sync import get_market_summary_for
+from skinport_sync import (
     sync_all_prices,
     get_sync_state,
-    get_market_summary_for,
     start_scheduler as start_price_scheduler,
 )
 
@@ -489,17 +489,15 @@ def _require_admin(x_admin_token: Optional[str] = Header(None)):
 
 
 @api.post("/skins/refresh-prices")
-async def refresh_prices(full: bool = False, _: bool = Depends(_require_admin)):
-    """Trigger a Steam Market price sync in the background.
-    By default syncs the top-6000 most-listed items (~3 min). Pass ?full=true
-    to walk the entire ~34k catalog (~15 min, higher rate-limit risk).
-    Returns immediately; poll GET /skins/price-sync-status for progress."""
+async def refresh_prices(_: bool = Depends(_require_admin)):
+    """Trigger a Skinport price sync in the background. Returns immediately;
+    poll GET /skins/price-sync-status for progress."""
     import asyncio as _aio
     state = get_sync_state()
     if state["running"]:
         return {"ok": True, "already_running": True, "state": state}
-    _aio.create_task(sync_all_prices(db, full=full))
-    return {"ok": True, "started": True, "full": full, "state": get_sync_state()}
+    _aio.create_task(sync_all_prices(db))
+    return {"ok": True, "started": True, "source": "skinport", "state": get_sync_state()}
 
 
 @api.get("/skins/price-sync-status")

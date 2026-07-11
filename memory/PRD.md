@@ -41,6 +41,29 @@ User wants a marketplace to buy/sell CS2 skins where users login via Steam ID, s
 - Background asyncio scheduler refreshes prices every 6h, defaults to
   top-6000 most-listed items per run (fast + rate-limit friendly)
 
+## Live Skinport Prices (Jul 2026)
+- New `skinport_sync.py` uses Skinport's free public API
+  (`https://api.skinport.com/v1/items?app_id=730&currency=USD`), no key needed
+- Single HTTP call returns all ~24,800 CS2 items with suggested_price,
+  min/max/mean/median prices, and quantity — full sync in ~2 seconds vs.
+  6+ minutes for the old Steam Market paginator (which is retained as
+  `price_sync.py` fallback but no longer scheduled)
+- Requires the `brotli` Python package for httpx to decode responses
+- Same `market_prices` collection schema so all existing endpoints and UI
+  work with no changes; UI badge updated from "Steam Market" to "Skinport"
+- Background scheduler still refreshes every 6h
+- Admin: `POST /api/skins/refresh-prices` with `X-Admin-Token` triggers manual sync
+
+## Real per-item Float Values (deferred)
+- Getting a specific item's float value requires connecting to Valve's
+  CS2 Game Coordinator, which needs a dedicated Steam account with CS2
+  owned, phone-verified, and a persistent Node.js daemon (node-globaloffensive).
+- Not feasible in this Kubernetes pod (no long-running background workers).
+- Path forward: build a standalone `steam-inspect-bot` Node.js service the
+  user deploys separately, expose an HTTP endpoint, backend calls it.
+- Alternative for MVP: keep float RANGE bar (min_float..max_float per skin)
+  which is what CS2 fundamentally allows to be known without an inspection.
+
 ## Float Value Display (Jul 2026)
 - Reusable `FloatBar` component with 5 color-coded wear-tier segments
   (FN green → BS red), a "dim" mask outside the skin's min_float/max_float
