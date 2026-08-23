@@ -460,23 +460,26 @@ frontend:
           agent: "main"
           comment: "Main price panel now shows 'Steam Market · live · $X' with min/max range, on-sale volume, and 'Updated Nh ago'. New second panel lists all wear variants sorted by price with per-wear listings count. Verified in browser."
 
+  - task: "Multi-tab / multi-account isolation bug fix (localStorage → sessionStorage)"
+    implemented: true
+    working: true
+    file: "frontend/src/context/AuthContext.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅✅✅ ALL 5 TESTS PASSED. BUG FIX VERIFIED: Auth tokens migrated from localStorage (shared across tabs) to sessionStorage (tab-scoped). TEST 1 (CRITICAL): Logged into Tab A as regular user 76561198000000000, then logged into Tab B as admin. After Tab B admin login, Tab A was reloaded and STILL showed regular user session (Player 000000), NOT admin. Both tabs maintained separate sessions with tokens in sessionStorage only (localStorage.cs2_token = None in both tabs). Original bug FIXED — logging into admin in one tab does NOT affect other tabs. TEST 2: Admin session persisted across page reload within same tab (sessionStorage survives reload). TEST 3: Logout in Tab A did NOT affect Tab B admin session (no cascade). TEST 4: Legacy localStorage migration working — injected fake token into localStorage, after reload it was cleaned up (removed from localStorage), invalid token rejected, user logged out. TEST 5: Cross-tab logout does NOT cascade — Tab A logout did NOT affect Tab B admin session. All assertions passed. Migration logic cleanly handles legacy tokens. No storage event listeners causing side effects. Multi-account testing in same browser now fully supported."
+
 metadata:
   created_by: "main"
-  version: "1.4"
-  test_sequence: 4
+  version: "1.5"
+  test_sequence: 5
 
 test_plan:
   current_focus:
-    - "POST /api/admin/promote — bootstrap admin promotion"
-    - "Ban enforcement — login and auth blocking"
-    - "Admin auth gating — all admin endpoints"
-    - "GET /api/admin/stats — dashboard statistics"
-    - "GET /api/admin/transactions — order history with filters"
-    - "GET /api/admin/users — user list with filters and order counts"
-    - "GET /api/admin/users/{user_id} — user detail view"
-    - "GET /api/admin/backup — full database backup"
-    - "POST /api/admin/restore — database restore with merge/replace modes"
-    - "IP capture — last_ip and ip_history tracking"
+    - "Multi-tab / multi-account isolation bug fix (localStorage → sessionStorage)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -492,4 +495,7 @@ agent_communication:
       message: "✅ ALL FAVOURITES + NOTIFICATIONS TESTS PASSED (10/10 endpoints + 2 triggers = 12/12). Comprehensive testing completed for all new endpoints. FAVOURITES: (1) POST /favorites with all validation scenarios (401, 400, 404) working correctly. Server-side snapshot enrichment verified for both listing and skin types. Idempotent duplicate handling working. (2) GET /favorites returns proper structure with listing_status field attached to listing-type favorites. (3) GET /favorites/check is properly public (200 without auth, not 401) and returns correct arrays. (4) DELETE /favorites working with proper auth and idempotent behavior. NOTIFICATIONS: (5) GET /notifications with proper auth gating. (6) GET /notifications/unread-count is properly public (CRITICAL: does NOT return 401 without auth). (7) POST /notifications/read-all working, verified unread count updates. (8) POST /notifications/{id}/read working, verified single notification marked read. TRIGGERS: (9) listing_sold trigger verified end-to-end: created listing → favorited by user B → simulated sale → user B received notification with correct type, title, body, and target_id. (10) new_listing trigger verified end-to-end: user B favorited skin → user A created listing for that skin → user B immediately received notification with correct details including price and wear. All notification fan-outs working correctly, buyer/seller exclusion logic working. Backend implementation is production-ready."
     - agent: "testing"
       message: "✅ ALL ADMIN PANEL TESTS PASSED (48/48). Comprehensive testing completed for all admin endpoints. TESTED: (1) POST /admin/promote with 5 scenarios (no token, wrong token, no params, non-existent user, success) — all working. (2) Ban enforcement: ban user → login blocked with 403 + ban reason, old token blocked, unban → login works, self-ban prevention → 400. (3) Admin auth gating: all 8 endpoints tested with no token (401) and non-admin token (403) — 16 tests passed. (4) GET /admin/stats → all required keys present (users, orders, listings, revenue_usd) with correct structure. (5) GET /admin/transactions → basic call, status filter, search, pagination all working. (6) GET /admin/users → returns users with orders_count, sensitive fields redacted, filters working. MINOR FIX APPLIED: Added backward compatibility for users missing is_admin/is_banned fields (defaults to false). (7) GET /admin/users/{id} → returns user detail with orders/listings/favorites, 404 for non-existent. (8) GET /admin/backup → returns valid JSON with all 7 collections, correct headers. (9) POST /admin/restore → validates mode, empty file, invalid JSON, merge mode working with stats. (10) IP capture → last_ip and ip_history populated correctly. All admin endpoints production-ready."
+    - agent: "testing"
+      message: "✅✅✅ MULTI-TAB ISOLATION BUG FIX VERIFIED (5/5 tests passed). Tested the migration from localStorage (shared across tabs) to sessionStorage (tab-scoped) for auth tokens. All 5 critical scenarios passed: (1) THE ORIGINAL BUG FIX: Logged into Tab A as regular user, then Tab B as admin. After Tab B login, Tab A reloaded and STILL showed regular user (not admin). Sessions isolated correctly. (2) Session persistence: Admin session survived page reload within same tab. (3) Logout isolation: Logout in Tab A did NOT affect Tab B. (4) Legacy migration: Fake token in localStorage was cleaned up after reload, user logged out. (5) Cross-tab logout: No cascade between tabs. All tokens stored in sessionStorage only (localStorage.cs2_token = None). Multi-account testing in same browser now fully supported. Bug fix production-ready."
+
 

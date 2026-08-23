@@ -458,7 +458,7 @@ function BackupTab() {
   const downloadBackup = async () => {
     setRunning(true);
     try {
-      const token = localStorage.getItem("cs2_token");
+      const token = sessionStorage.getItem("cs2_token") || localStorage.getItem("cs2_token");
       const resp = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/admin/backup`, {
         headers: { Authorization: `Bearer ${token}` },
       });

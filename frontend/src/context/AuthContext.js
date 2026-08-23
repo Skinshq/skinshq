@@ -3,12 +3,36 @@ import api from "../lib/api";
 
 const AuthCtx = createContext(null);
 
+// Per-tab auth token so users can be logged in as different accounts in
+// different tabs / windows simultaneously (needed for QA + multi-role testing).
+// sessionStorage is scoped to the browsing context (tab), unlike localStorage
+// which is shared across the whole origin.
+const TOKEN_KEY = "cs2_token";
+const LEGACY_TOKEN_KEY = "cs2_token"; // same key, previously in localStorage
+
+function readToken() {
+  // One-time migration: if a token exists in the (shared) localStorage from
+  // a previous version, adopt it in this tab's sessionStorage and remove
+  // it from localStorage so it stops leaking into other tabs.
+  const sessionTok = sessionStorage.getItem(TOKEN_KEY);
+  if (sessionTok) return sessionTok;
+  try {
+    const legacy = localStorage.getItem(LEGACY_TOKEN_KEY);
+    if (legacy) {
+      sessionStorage.setItem(TOKEN_KEY, legacy);
+      localStorage.removeItem(LEGACY_TOKEN_KEY);
+      return legacy;
+    }
+  } catch { /* private mode etc. */ }
+  return null;
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const refresh = async () => {
-    const token = localStorage.getItem("cs2_token");
+    const token = readToken();
     if (!token) {
       setUser(null);
       setLoading(false);
@@ -18,7 +42,7 @@ export function AuthProvider({ children }) {
       const { data } = await api.get("/auth/me");
       setUser(data);
     } catch {
-      localStorage.removeItem("cs2_token");
+      sessionStorage.removeItem(TOKEN_KEY);
       setUser(null);
     } finally {
       setLoading(false);
@@ -30,12 +54,16 @@ export function AuthProvider({ children }) {
   }, []);
 
   const login = async (token) => {
-    localStorage.setItem("cs2_token", token);
+    sessionStorage.setItem(TOKEN_KEY, token);
+    // Explicitly ensure any legacy token in localStorage from previous
+    // versions is removed so it can't override this tab's session.
+    try { localStorage.removeItem(LEGACY_TOKEN_KEY); } catch { /* ignore */ }
     await refresh();
   };
 
   const logout = () => {
-    localStorage.removeItem("cs2_token");
+    sessionStorage.removeItem(TOKEN_KEY);
+    try { localStorage.removeItem(LEGACY_TOKEN_KEY); } catch { /* ignore */ }
     setUser(null);
   };
 
@@ -53,15 +81,6 @@ export function AuthProvider({ children }) {
     }
     window.location.href = url;
   };
-
-  // Sync auth across tabs — when Steam callback tab saves token, parent tab picks it up
-  useEffect(() => {
-    const onStorage = (e) => {
-      if (e.key === "cs2_token" && e.newValue) refresh();
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
 
   return (
     <AuthCtx.Provider value={{ user, loading, login, logout, loginWithSteam, refresh }}>
