@@ -41,6 +41,18 @@ User wants a marketplace to buy/sell CS2 skins where users login via Steam ID, s
 - Background asyncio scheduler refreshes prices every 6h, defaults to
   top-6000 most-listed items per run (fast + rate-limit friendly)
 
+## Admin Login Window (Aug 2026)
+- Password-based admin login endpoint `POST /api/admin/login` (email +
+  bcrypt-hashed password on the user doc) returns the same JWT shape as
+  Steam login. Rejects banned users, non-admins, and wrong passwords.
+- Bootstrap seed on startup: creates an admin user for
+  `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` env vars if none
+  exists yet (default placeholder: admin@skinmrkt.com / admin1234).
+- New frontend page `/admin/login` — email + password form. `/admin`
+  redirects here when the visitor is not logged in as admin.
+- `admin_password_hash` field is stripped from every admin panel
+  response so it never leaks over the wire.
+
 ## Admin Panel (Aug 2026)
 - New `is_admin`, `is_banned`, `ban_reason`, `banned_at`, `banned_by`,
   `last_ip`, `ip_history[]`, `last_seen_at` fields on users. Captured

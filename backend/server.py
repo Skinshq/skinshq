@@ -12,6 +12,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime, timezone, timedelta
+import bcrypt
 from emergentintegrations.payments.stripe.checkout import (
     StripeCheckout,
     CheckoutSessionRequest,
@@ -37,6 +38,8 @@ JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 PRICE_SYNC_ENABLED = os.environ.get("PRICE_SYNC_ENABLED", "1") == "1"
+BOOTSTRAP_ADMIN_EMAIL = os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "admin@skinmrkt.com")
+BOOTSTRAP_ADMIN_PASSWORD = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "admin1234")
 
 # Stripe checkout is initialized per-request via StripeCheckout(api_key=STRIPE_KEY, webhook_url=...)
 
@@ -289,6 +292,37 @@ async def seed_catalog():
         await db.notifications.create_index([("user_id", 1), ("read", 1)])
     except Exception as e:
         log.warning(f"notifications index warning: {e}")
+
+    # Bootstrap admin login credentials — creates a password-based admin
+    # user on first boot if one doesn't already exist for the configured
+    # BOOTSTRAP_ADMIN_EMAIL. Use env vars to override the defaults.
+    if BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD:
+        try:
+            existing = await db.users.find_one({"admin_email": BOOTSTRAP_ADMIN_EMAIL.lower()})
+            if not existing:
+                pw_hash = bcrypt.hashpw(
+                    BOOTSTRAP_ADMIN_PASSWORD.encode("utf-8"),
+                    bcrypt.gensalt(rounds=10),
+                ).decode("utf-8")
+                admin_doc = {
+                    "id": str(uuid.uuid4()),
+                    "steam_id": "admin-" + str(uuid.uuid4())[:12],
+                    "display_name": "Admin",
+                    "admin_email": BOOTSTRAP_ADMIN_EMAIL.lower(),
+                    "admin_password_hash": pw_hash,
+                    "auth_method": "admin_password",
+                    "is_admin": True,
+                    "is_verified": True,
+                    "is_banned": False,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                await db.users.insert_one(admin_doc)
+                log.info(f"Seeded bootstrap admin: {BOOTSTRAP_ADMIN_EMAIL}")
+            # Ensure the admin_email lookup is indexed + unique
+            await db.users.create_index("admin_email", unique=True,
+                                         partialFilterExpression={"admin_email": {"$exists": True}})
+        except Exception as e:
+            log.warning(f"admin bootstrap warning: {e}")
 
     # Launch background price sync scheduler (6h refresh). Non-blocking.
     if PRICE_SYNC_ENABLED:
@@ -1118,8 +1152,51 @@ async def mark_all_read(user=Depends(get_current_user)):
 
 # ---------------- Admin Panel ----------------
 
+class AdminLogin(BaseModel):
+    email: str
+    password: str
+
+
 class BanPayload(BaseModel):
     reason: Optional[str] = None
+
+
+@api.post("/admin/login")
+async def admin_login(payload: AdminLogin, request: Request):
+    """Email/password login for admins. Returns a JWT identical in shape to
+    the Steam-based JWT (Authorization: Bearer <token>)."""
+    email = (payload.email or "").strip().lower()
+    pw = payload.password or ""
+    if not email or not pw:
+        raise HTTPException(400, "Email and password required")
+    user = await db.users.find_one({"admin_email": email}, {"_id": 0})
+    if not user or not user.get("admin_password_hash"):
+        raise HTTPException(401, "Invalid credentials")
+    if user.get("is_banned"):
+        raise HTTPException(403, f"Account banned: {user.get('ban_reason') or 'Access denied'}")
+    try:
+        ok = bcrypt.checkpw(pw.encode("utf-8"), user["admin_password_hash"].encode("utf-8"))
+    except Exception:
+        ok = False
+    if not ok:
+        raise HTTPException(401, "Invalid credentials")
+    if not user.get("is_admin"):
+        raise HTTPException(403, "Not an admin account")
+    # Update last IP + last seen
+    ip = _client_ip(request)
+    upd = {"last_seen_at": datetime.now(timezone.utc).isoformat()}
+    add = {}
+    if ip:
+        upd["last_ip"] = ip
+        add["ip_history"] = ip
+    update_doc = {"$set": upd}
+    if add:
+        update_doc["$addToSet"] = add
+    await db.users.update_one({"id": user["id"]}, update_doc)
+    # Strip the hash before returning
+    user.pop("admin_password_hash", None)
+    token = make_jwt(user["id"], user.get("steam_id", "admin"))
+    return {"token": token, "user": user}
 
 
 @api.post("/admin/promote")
@@ -1218,7 +1295,7 @@ async def admin_users(q: Optional[str] = None,
             {"last_ip": {"$regex": q}},
         ]
     total = await db.users.count_documents(filt)
-    users = await db.users.find(filt, {"_id": 0, "verify_code": 0, "email_code": 0}) \
+    users = await db.users.find(filt, {"_id": 0, "verify_code": 0, "email_code": 0, "admin_password_hash": 0}) \
         .sort([("created_at", -1)]).skip(skip).limit(limit).to_list(limit)
 
     # Ensure all users have is_admin and is_banned fields (for backward compatibility)
@@ -1256,7 +1333,7 @@ async def admin_users(q: Optional[str] = None,
 @api.get("/admin/users/{user_id}")
 async def admin_user_detail(user_id: str, _: dict = Depends(get_admin_user)):
     user = await db.users.find_one({"id": user_id},
-                                     {"_id": 0, "verify_code": 0, "email_code": 0})
+                                     {"_id": 0, "verify_code": 0, "email_code": 0, "admin_password_hash": 0})
     if not user:
         raise HTTPException(404, "User not found")
     orders_bought = await db.orders.find({"buyer_id": user_id}, {"_id": 0}).sort([("created_at", -1)]).limit(50).to_list(50)

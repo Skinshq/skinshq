@@ -536,17 +536,8 @@ export default function AdminPage() {
   const [tab, setTab] = useState("dashboard");
 
   if (loading) return <div className="max-w-7xl mx-auto px-6 py-16 text-[#8A8A8A]">Loading…</div>;
-  if (!user) return <Navigate to="/" replace />;
-  if (!user.is_admin) {
-    return (
-      <div className="max-w-2xl mx-auto px-6 py-24 text-center">
-        <ShieldAlert className="w-10 h-10 text-[#EB4B4B]/60 mx-auto mb-4" />
-        <h1 className="font-display font-black text-2xl tracking-tight mb-2">Admin access required</h1>
-        <p className="text-sm text-[#8A8A8A]">You don't have permission to view this page.</p>
-        <Link to="/" className="text-[#E4AE39] underline mt-4 inline-block">Back home</Link>
-      </div>
-    );
-  }
+  if (!user) return <Navigate to="/admin/login" replace />;
+  if (!user.is_admin) return <Navigate to="/admin/login" replace />;
 
   return (
     <div className="max-w-7xl mx-auto px-6 lg:px-12 py-10" data-testid="admin-page">
