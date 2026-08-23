@@ -1,0 +1,79 @@
+================================================================================
+CS2 MARKETPLACE - ADMIN PANEL BACKEND TEST
+================================================================================
+
+=== AUTH SETUP ===
+✅ Admin authenticated (ID: 6e33a82c-b020-4c5c-b34b-299c9649fca5, is_admin: True)
+✅ Test user authenticated (ID: e97e9745-69df-4194-8c08-a4d0d9145455, is_admin: None)
+
+=== TEST POST /api/admin/promote ===
+✅ POST /admin/promote without X-Admin-Token → 403
+✅ POST /admin/promote with wrong token → 403
+✅ POST /admin/promote without steam_id/user_id → 400
+✅ POST /admin/promote with non-existent steam_id → 404
+✅ POST /admin/promote with correct token + existing steam_id → 200 with {ok:true, promoted:true}
+
+=== TEST BAN ENFORCEMENT ===
+✅ Admin banned test user e97e9745-69df-4194-8c08-a4d0d9145455
+✅ Banned user login → 403 with 'Account banned: test ban'
+✅ Banned user GET /auth/me → 403 with ban reason
+✅ Admin unbanned test user e97e9745-69df-4194-8c08-a4d0d9145455
+✅ Unbanned user can log in again → 200
+✅ Admin self-ban → 400 'You cannot ban yourself'
+
+=== TEST ADMIN AUTH GATING ===
+✅ GET /admin/stats without token → 401
+✅ GET /admin/stats with non-admin token → 403
+✅ GET /admin/transactions without token → 401
+✅ GET /admin/transactions with non-admin token → 403
+✅ GET /admin/users without token → 401
+✅ GET /admin/users with non-admin token → 403
+✅ GET /admin/users/e97e9745-69df-4194-8c08-a4d0d9145455 without token → 401
+✅ GET /admin/users/e97e9745-69df-4194-8c08-a4d0d9145455 with non-admin token → 403
+✅ POST /admin/users/e97e9745-69df-4194-8c08-a4d0d9145455/ban without token → 401
+✅ POST /admin/users/e97e9745-69df-4194-8c08-a4d0d9145455/ban with non-admin token → 403
+✅ POST /admin/users/e97e9745-69df-4194-8c08-a4d0d9145455/unban without token → 401
+✅ POST /admin/users/e97e9745-69df-4194-8c08-a4d0d9145455/unban with non-admin token → 403
+✅ GET /admin/backup without token → 401
+✅ GET /admin/backup with non-admin token → 403
+✅ POST /admin/restore without token → 401
+✅ POST /admin/restore with non-admin token → 403
+
+=== TEST GET /admin/stats ===
+✅ GET /admin/stats → 200 with all required keys and valid counts
+✅ GET /admin/stats revenue_usd is valid: 0.0
+
+=== TEST GET /admin/transactions ===
+✅ GET /admin/transactions → 200 with items=0, total=0
+✅ GET /admin/transactions?status=pending → 200 with 0 items
+✅ GET /admin/transactions?q=nonexistent → 200 with 0 items
+✅ GET /admin/transactions?limit=10&skip=0 → 200 with pagination shape
+
+=== TEST GET /admin/users ===
+❌ GET /admin/users user missing keys: ['is_admin', 'is_banned']
+   Details: {"id": "6af6d1ef-5fa4-429c-89fe-14442e2924a5", "steam_id": "76561198000000000", "display_name": "Player 000000", "avatar": null, "profile_url": "https://steamcommunity.com/profiles/76561198000000000", "is_verified": false, "auth_method": "steamid_manual", "created_at": "2026-08-23T05:38:09.052278+00:00", "orders_count": {"bought": 0, "sold": 0, "pending": 0, "completed": 0}}
+
+=== TEST GET /admin/users/{user_id} ===
+✅ GET /admin/users/e97e9745-69df-4194-8c08-a4d0d9145455 → 200 with all required fields, sensitive fields redacted
+✅ GET /admin/users/{nonexistent} → 404
+
+=== TEST GET /admin/backup ===
+✅ GET /admin/backup → 200 with valid JSON structure, all 7 collections present
+
+=== TEST POST /admin/restore ===
+✅ POST /admin/restore mode=xyz → 400 'mode must be merge or replace'
+✅ POST /admin/restore empty file → 400
+✅ POST /admin/restore invalid JSON → 400
+✅ POST /admin/restore mode=merge → 200 with stats: {"users": {"restored": 4, "upserted": 0, "modified": 0}, "listings": {"restored": 0}, "orders": {"restored": 0}, "favorites": {"restored": 3, "upserted": 0, "modified": 0}, "notifications": {"restored": 2, "upserted": 0, "modified": 0}, "payment_transactions": {"restored": 0}, "market_prices": {"restored": 26201, "upserted": 0, "modified": 0}}
+✅ Verified /admin/stats after restore: users=4, orders=0
+
+=== TEST IP CAPTURE ===
+✅ IP capture working: last_ip=104.198.214.223, ip_history has 2 entries
+
+================================================================================
+TEST SUMMARY: 44 passed, 1 failed
+================================================================================
+
+Failed tests:
+❌ GET /admin/users user missing keys: ['is_admin', 'is_banned']
+   Details: {"id": "6af6d1ef-5fa4-429c-89fe-14442e2924a5", "steam_id": "76561198000000000", "display_name": "Player 000000", "avatar": null, "profile_url": "https://steamcommunity.com/profiles/76561198000000000", "is_verified": false, "auth_method": "steamid_manual", "created_at": "2026-08-23T05:38:09.052278+00:00", "orders_count": {"bought": 0, "sold": 0, "pending": 0, "completed": 0}}

@@ -68,7 +68,8 @@ def decode_jwt(token: str) -> Optional[dict]:
         return None
 
 
-async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
+async def get_current_user(authorization: Optional[str] = Header(None),
+                            request: Request = None) -> dict:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Not authenticated")
     payload = decode_jwt(authorization.split(" ", 1)[1])
@@ -77,6 +78,36 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0})
     if not user:
         raise HTTPException(401, "User not found")
+    if user.get("is_banned"):
+        raise HTTPException(403, f"Account banned: {user.get('ban_reason') or 'Terms of Service violation'}")
+    # Best-effort IP capture on every auth'd request (silent failure)
+    try:
+        if request is not None:
+            ip = _client_ip(request)
+            if ip and ip != user.get("last_ip"):
+                await db.users.update_one({"id": user["id"]}, {
+                    "$set": {"last_ip": ip, "last_seen_at": datetime.now(timezone.utc).isoformat()},
+                    "$addToSet": {"ip_history": ip},
+                })
+    except Exception:
+        pass
+    return user
+
+
+def _client_ip(request: Request) -> Optional[str]:
+    """Extract the real client IP behind the ingress. Trusts X-Forwarded-For's first hop."""
+    xff = request.headers.get("x-forwarded-for") or ""
+    if xff:
+        return xff.split(",")[0].strip()
+    real = request.headers.get("x-real-ip")
+    if real:
+        return real.strip()
+    return request.client.host if request.client else None
+
+
+async def get_admin_user(user=Depends(get_current_user)) -> dict:
+    if not user.get("is_admin"):
+        raise HTTPException(403, "Admin only")
     return user
 
 
@@ -288,6 +319,7 @@ async def steam_callback(request: Request):
     if not steam_id:
         return RedirectResponse(url=f"{FRONTEND_URL}/?auth=failed")
 
+    ip = _client_ip(request)
     # Fetch/create user
     user = await db.users.find_one({"steam_id": steam_id}, {"_id": 0})
     if not user:
@@ -301,18 +333,28 @@ async def steam_callback(request: Request):
             "is_verified": True,
             "auth_method": "steam_openid",
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_ip": ip,
+            "ip_history": [ip] if ip else [],
+            "is_admin": False,
+            "is_banned": False,
         }
         await db.users.insert_one(user.copy())
         user.pop("_id", None)
     else:
-        # Refresh display info
+        # Refresh display info + IP
         summary = await fetch_player_summary(steam_id, STEAM_API_KEY)
+        upd = {"last_seen_at": datetime.now(timezone.utc).isoformat()}
         if summary:
-            await db.users.update_one(
-                {"steam_id": steam_id},
-                {"$set": {"display_name": summary.get("personaname", user["display_name"]),
-                          "avatar": summary.get("avatarfull", user.get("avatar"))}}
-            )
+            upd["display_name"] = summary.get("personaname", user["display_name"])
+            upd["avatar"] = summary.get("avatarfull", user.get("avatar"))
+        add = {}
+        if ip:
+            upd["last_ip"] = ip
+            add["ip_history"] = ip
+        update_doc = {"$set": upd}
+        if add:
+            update_doc["$addToSet"] = add
+        await db.users.update_one({"steam_id": steam_id}, update_doc)
 
     token = make_jwt(user["id"], steam_id)
     return RedirectResponse(url=f"{FRONTEND_URL}/auth/callback?token={token}")
@@ -325,7 +367,7 @@ class SteamIdLogin(BaseModel):
 
 
 @api.post("/auth/steamid")
-async def login_with_steamid(payload: SteamIdLogin):
+async def login_with_steamid(payload: SteamIdLogin, request: Request):
     """Fallback login: accept SteamID64 directly. Creates an UNVERIFIED session.
     Unverified users can browse but cannot list skins or purchase until they
     prove Steam profile ownership via /auth/verify/init + /auth/verify/check.
@@ -334,6 +376,7 @@ async def login_with_steamid(payload: SteamIdLogin):
     if not steam_id.isdigit() or len(steam_id) != 17 or not steam_id.startswith("7656"):
         raise HTTPException(400, "Invalid SteamID64 (must be a 17-digit number starting with 7656)")
 
+    ip = _client_ip(request)
     user = await db.users.find_one({"steam_id": steam_id}, {"_id": 0})
     if not user:
         summary = await fetch_player_summary(steam_id, STEAM_API_KEY) or {}
@@ -346,9 +389,25 @@ async def login_with_steamid(payload: SteamIdLogin):
             "is_verified": False,
             "auth_method": "steamid_manual",
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_ip": ip,
+            "ip_history": [ip] if ip else [],
+            "is_admin": False,
+            "is_banned": False,
         }
         await db.users.insert_one(user.copy())
         user.pop("_id", None)
+    else:
+        if user.get("is_banned"):
+            raise HTTPException(403, f"Account banned: {user.get('ban_reason') or 'Terms of Service violation'}")
+        upd = {"last_seen_at": datetime.now(timezone.utc).isoformat()}
+        add = {}
+        if ip:
+            upd["last_ip"] = ip
+            add["ip_history"] = ip
+        update_doc = {"$set": upd}
+        if add:
+            update_doc["$addToSet"] = add
+        await db.users.update_one({"steam_id": steam_id}, update_doc)
 
     token = make_jwt(user["id"], steam_id)
     return {"token": token, "user": user}
@@ -412,8 +471,6 @@ async def require_verified(user=Depends(get_current_user)):
         raise HTTPException(403, "Read-only mode. Sign in with Steam OpenID to list or purchase skins.")
     return user
 
-
-import secrets
 
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "onboarding@resend.dev")
@@ -1057,6 +1114,271 @@ async def mark_all_read(user=Depends(get_current_user)):
         {"$set": {"read": True}}
     )
     return {"ok": True, "updated": res.modified_count}
+
+
+# ---------------- Admin Panel ----------------
+
+class BanPayload(BaseModel):
+    reason: Optional[str] = None
+
+
+@api.post("/admin/promote")
+async def admin_promote(steam_id: Optional[str] = None,
+                         user_id: Optional[str] = None,
+                         x_admin_token: Optional[str] = Header(None)):
+    """Bootstrap: promote a user to admin using the server-side ADMIN_TOKEN.
+    Use this ONCE to make your Steam account an admin; from then on the
+    admin can do everything via their normal JWT."""
+    if not ADMIN_TOKEN or x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(403, "Admin token required")
+    if not steam_id and not user_id:
+        raise HTTPException(400, "Provide steam_id or user_id")
+    q = {"steam_id": steam_id} if steam_id else {"id": user_id}
+    res = await db.users.update_one(q, {"$set": {"is_admin": True}})
+    if not res.matched_count:
+        raise HTTPException(404, "User not found")
+    return {"ok": True, "promoted": True}
+
+
+@api.get("/admin/stats")
+async def admin_stats(_: dict = Depends(get_admin_user)):
+    now = datetime.now(timezone.utc)
+    day_ago = (now - timedelta(hours=24)).isoformat()
+    week_ago = (now - timedelta(days=7)).isoformat()
+
+    users_total = await db.users.count_documents({})
+    users_banned = await db.users.count_documents({"is_banned": True})
+    users_verified = await db.users.count_documents({"is_verified": True})
+    users_active_24h = await db.users.count_documents({"last_seen_at": {"$gte": day_ago}})
+    users_new_7d = await db.users.count_documents({"created_at": {"$gte": week_ago}})
+
+    orders_total = await db.orders.count_documents({})
+    orders_pending = await db.orders.count_documents({"status": "pending"})
+    orders_paid = await db.orders.count_documents({"status": "paid", "trade_status": {"$ne": "completed"}})
+    orders_completed = await db.orders.count_documents({"trade_status": "completed"})
+
+    listings_active = await db.listings.count_documents({"status": "active"})
+    listings_sold = await db.listings.count_documents({"status": "sold"})
+
+    # Revenue (sum amount_usd of paid + completed orders)
+    revenue_pipeline = [
+        {"$match": {"status": "paid"}},
+        {"$group": {"_id": None, "total": {"$sum": "$amount_usd"}}},
+    ]
+    revenue_docs = await db.orders.aggregate(revenue_pipeline).to_list(1)
+    revenue_total = float(revenue_docs[0]["total"]) if revenue_docs else 0.0
+
+    return {
+        "users": {"total": users_total, "banned": users_banned,
+                  "verified": users_verified, "active_24h": users_active_24h,
+                  "new_7d": users_new_7d},
+        "orders": {"total": orders_total, "pending": orders_pending,
+                   "paid": orders_paid, "completed": orders_completed},
+        "listings": {"active": listings_active, "sold": listings_sold},
+        "revenue_usd": round(revenue_total, 2),
+    }
+
+
+@api.get("/admin/transactions")
+async def admin_transactions(status: Optional[str] = None,
+                              q: Optional[str] = None,
+                              limit: int = 100,
+                              skip: int = 0,
+                              _: dict = Depends(get_admin_user)):
+    filt = {}
+    if status:
+        filt["status"] = status
+    if q:
+        # Search by order id or listing skin_name (case-insensitive)
+        filt["$or"] = [
+            {"id": q},
+            {"listing_snapshot.skin_name": {"$regex": q, "$options": "i"}},
+            {"buyer_name": {"$regex": q, "$options": "i"}},
+            {"seller_name": {"$regex": q, "$options": "i"}},
+        ]
+    total = await db.orders.count_documents(filt)
+    items = await db.orders.find(filt, {"_id": 0}).sort([("created_at", -1)]).skip(skip).limit(limit).to_list(limit)
+    return {"items": items, "total": total, "limit": limit, "skip": skip}
+
+
+@api.get("/admin/users")
+async def admin_users(q: Optional[str] = None,
+                       banned: Optional[bool] = None,
+                       limit: int = 100,
+                       skip: int = 0,
+                       _: dict = Depends(get_admin_user)):
+    filt = {}
+    if banned is not None:
+        filt["is_banned"] = banned
+    if q:
+        filt["$or"] = [
+            {"steam_id": {"$regex": q}},
+            {"display_name": {"$regex": q, "$options": "i"}},
+            {"email": {"$regex": q, "$options": "i"}},
+            {"last_ip": {"$regex": q}},
+        ]
+    total = await db.users.count_documents(filt)
+    users = await db.users.find(filt, {"_id": 0, "verify_code": 0, "email_code": 0}) \
+        .sort([("created_at", -1)]).skip(skip).limit(limit).to_list(limit)
+
+    # Ensure all users have is_admin and is_banned fields (for backward compatibility)
+    for u in users:
+        if "is_admin" not in u:
+            u["is_admin"] = False
+        if "is_banned" not in u:
+            u["is_banned"] = False
+    
+    # Attach order counts per user (bulk aggregation to avoid N+1)
+    if users:
+        ids = [u["id"] for u in users]
+        pipeline = [
+            {"$match": {"$or": [{"buyer_id": {"$in": ids}}, {"seller_id": {"$in": ids}}]}},
+            {"$project": {"buyer_id": 1, "seller_id": 1, "status": 1, "trade_status": 1}},
+        ]
+        agg_orders = await db.orders.aggregate(pipeline).to_list(20000)
+        counts = {uid: {"bought": 0, "sold": 0, "pending": 0, "completed": 0} for uid in ids}
+        for o in agg_orders:
+            if o.get("buyer_id") in counts:
+                counts[o["buyer_id"]]["bought"] += 1
+            if o.get("seller_id") in counts:
+                counts[o["seller_id"]]["sold"] += 1
+            if o.get("status") == "pending":
+                for uid in (o.get("buyer_id"), o.get("seller_id")):
+                    if uid in counts: counts[uid]["pending"] += 1
+            if o.get("trade_status") == "completed":
+                for uid in (o.get("buyer_id"), o.get("seller_id")):
+                    if uid in counts: counts[uid]["completed"] += 1
+        for u in users:
+            u["orders_count"] = counts.get(u["id"], {})
+    return {"items": users, "total": total, "limit": limit, "skip": skip}
+
+
+@api.get("/admin/users/{user_id}")
+async def admin_user_detail(user_id: str, _: dict = Depends(get_admin_user)):
+    user = await db.users.find_one({"id": user_id},
+                                     {"_id": 0, "verify_code": 0, "email_code": 0})
+    if not user:
+        raise HTTPException(404, "User not found")
+    orders_bought = await db.orders.find({"buyer_id": user_id}, {"_id": 0}).sort([("created_at", -1)]).limit(50).to_list(50)
+    orders_sold = await db.orders.find({"seller_id": user_id}, {"_id": 0}).sort([("created_at", -1)]).limit(50).to_list(50)
+    listings = await db.listings.find({"seller_id": user_id}, {"_id": 0}).sort([("created_at", -1)]).limit(50).to_list(50)
+    favs_count = await db.favorites.count_documents({"user_id": user_id})
+    return {"user": user, "orders_bought": orders_bought,
+            "orders_sold": orders_sold, "listings": listings,
+            "favorites_count": favs_count}
+
+
+@api.post("/admin/users/{user_id}/ban")
+async def admin_ban_user(user_id: str, payload: BanPayload,
+                          admin: dict = Depends(get_admin_user)):
+    if admin["id"] == user_id:
+        raise HTTPException(400, "You cannot ban yourself")
+    res = await db.users.update_one({"id": user_id}, {
+        "$set": {
+            "is_banned": True,
+            "ban_reason": (payload.reason or "").strip() or "Terms of Service violation",
+            "banned_at": datetime.now(timezone.utc).isoformat(),
+            "banned_by": admin["id"],
+        }
+    })
+    if not res.matched_count:
+        raise HTTPException(404, "User not found")
+    # Also deactivate their active listings so buyers don't hit ghost items
+    await db.listings.update_many({"seller_id": user_id, "status": "active"},
+                                   {"$set": {"status": "banned_seller"}})
+    return {"ok": True, "banned": True}
+
+
+@api.post("/admin/users/{user_id}/unban")
+async def admin_unban_user(user_id: str, _: dict = Depends(get_admin_user)):
+    res = await db.users.update_one({"id": user_id}, {
+        "$set": {"is_banned": False},
+        "$unset": {"ban_reason": "", "banned_at": "", "banned_by": ""},
+    })
+    if not res.matched_count:
+        raise HTTPException(404, "User not found")
+    return {"ok": True, "banned": False}
+
+
+# --- Backup & Restore ---
+
+BACKUP_COLLECTIONS = ["users", "listings", "orders", "favorites", "notifications",
+                       "payment_transactions", "market_prices"]
+
+
+@api.get("/admin/backup")
+async def admin_backup(_: dict = Depends(get_admin_user)):
+    """Full JSON backup of all business collections. Excludes internal Mongo _id."""
+    dump = {"generated_at": datetime.now(timezone.utc).isoformat(),
+            "version": 1, "collections": {}}
+    for coll in BACKUP_COLLECTIONS:
+        docs = await db[coll].find({}, {"_id": 0}).to_list(200000)
+        dump["collections"][coll] = docs
+    from fastapi.responses import Response
+    import json as _json
+    body = _json.dumps(dump, default=str).encode("utf-8")
+    fname = f"skinmrkt-backup-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}.json"
+    return Response(content=body, media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+from fastapi import File, UploadFile, Form
+
+@api.post("/admin/restore")
+async def admin_restore(file: UploadFile = File(...),
+                         mode: str = Form("merge"),
+                         _: dict = Depends(get_admin_user)):
+    """Restore from a backup JSON. `mode='replace'` clears collections first;
+    `mode='merge'` (default) upserts by the natural key ('id' or 'session_id'
+    or 'market_hash_name'). Skips unknown collections silently."""
+    if mode not in ("merge", "replace"):
+        raise HTTPException(400, "mode must be 'merge' or 'replace'")
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "Empty file")
+    import json as _json
+    try:
+        dump = _json.loads(raw)
+    except Exception as e:
+        raise HTTPException(400, f"Invalid JSON: {e}")
+    collections = dump.get("collections") or {}
+    if not isinstance(collections, dict):
+        raise HTTPException(400, "Missing 'collections' object in backup")
+
+    NATURAL_KEYS = {
+        "users": "id", "listings": "id", "orders": "id",
+        "favorites": "id", "notifications": "id",
+        "payment_transactions": "session_id",
+        "market_prices": "market_hash_name",
+    }
+
+    stats = {}
+    for coll, docs in collections.items():
+        if coll not in NATURAL_KEYS:
+            continue  # skip unknown
+        if not isinstance(docs, list):
+            continue
+        if mode == "replace":
+            await db[coll].delete_many({})
+        if not docs:
+            stats[coll] = {"restored": 0}
+            continue
+        key = NATURAL_KEYS[coll]
+        from pymongo import UpdateOne
+        ops = []
+        for d in docs:
+            d.pop("_id", None)
+            if key not in d:
+                continue
+            ops.append(UpdateOne({key: d[key]}, {"$set": d}, upsert=True))
+        if ops:
+            res = await db[coll].bulk_write(ops, ordered=False)
+            stats[coll] = {"restored": len(ops),
+                           "upserted": res.upserted_count or 0,
+                           "modified": res.modified_count or 0}
+        else:
+            stats[coll] = {"restored": 0}
+    return {"ok": True, "mode": mode, "stats": stats}
 
 
 # ---------------- Currency FX ----------------

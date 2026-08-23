@@ -41,6 +41,35 @@ User wants a marketplace to buy/sell CS2 skins where users login via Steam ID, s
 - Background asyncio scheduler refreshes prices every 6h, defaults to
   top-6000 most-listed items per run (fast + rate-limit friendly)
 
+## Admin Panel (Aug 2026)
+- New `is_admin`, `is_banned`, `ban_reason`, `banned_at`, `banned_by`,
+  `last_ip`, `ip_history[]`, `last_seen_at` fields on users. Captured
+  automatically on every authenticated request via `_client_ip()`
+  (X-Forwarded-For aware) and on login endpoints.
+- Ban enforcement: `get_current_user` returns 403 for banned users;
+  `login_with_steamid` blocks banned users at login; ban also flips
+  seller's active listings → `banned_seller` status.
+- New `get_admin_user` FastAPI dep gates all admin endpoints.
+- Bootstrap: `POST /api/admin/promote?steam_id=…` uses the `ADMIN_TOKEN`
+  env once to elevate a Steam account; from then on the admin uses their
+  own JWT.
+- Admin endpoints:
+  - `GET /admin/stats` — dashboard KPIs (users total/banned/verified/active/new, orders total/pending/paid/completed, listings active/sold, revenue_usd)
+  - `GET /admin/transactions` — paginated orders with status + search filters
+  - `GET /admin/users` — paginated users with server-side aggregated
+    order counts (bought/sold/pending/completed) + IP + email
+  - `GET /admin/users/{id}` — full user detail with orders + listings + fav count
+  - `POST /admin/users/{id}/ban` — body `{reason?}`, prevents self-ban
+  - `POST /admin/users/{id}/unban`
+  - `GET /admin/backup` — full JSON dump (users, listings, orders,
+    favorites, notifications, payment_transactions, market_prices) as
+    downloadable file
+  - `POST /admin/restore` — multipart upload, `mode=merge|replace`,
+    idempotent upserts on natural keys
+- Frontend `/admin` page with 4 tabs (Dashboard, Transactions, Users, Backup),
+  user detail dialog with ban/unban actions, live download+restore UI.
+- Navbar shows an "ADMIN" badge + "Admin panel" menu entry only for admin users.
+
 ## Favourites & Notifications (Aug 2026)
 - Users can heart any master skin OR any specific listing from the Marketplace and Skin Detail pages.
 - Data model:

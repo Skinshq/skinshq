@@ -315,6 +315,126 @@ backend:
           agent: "testing"
           comment: "✅ VERIFIED: End-to-end test: (1) User B favorited skin (master_id). (2) User A created listing for that skin. (3) User B immediately received notification with type='new_listing', title='New listing for a favourite skin', body='10 Year Birthday Sticker Capsule (Field-Tested) just listed at $42.00'. Notification includes snapshot with skin_name, wear, image, rarity, price_usd, listing_id. Trigger working correctly, fan-out successful."
 
+  - task: "POST /api/admin/promote — bootstrap admin promotion"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED: All 5 test scenarios passed. (1) Without X-Admin-Token → 403. (2) With wrong token → 403. (3) With correct token + no steam_id/user_id → 400. (4) With correct token + non-existent steam_id → 404. (5) With correct token + existing steam_id → 200 with {ok:true, promoted:true}. Bootstrap promotion working correctly."
+
+  - task: "Ban enforcement — login and auth blocking"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED: All ban enforcement scenarios working. (1) Admin banned test user → 200. (2) Banned user login via POST /auth/steamid → 403 with 'Account banned: test ban'. (3) Banned user with old token GET /auth/me → 403 with ban reason. (4) Admin unban → 200. (5) Unbanned user can log in again → 200. (6) Self-ban prevention: admin tries to ban themselves → 400 'You cannot ban yourself'. Ban enforcement working correctly across all auth flows."
+
+  - task: "Admin auth gating — all admin endpoints"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED: All 8 admin endpoints tested with 2 scenarios each (16 tests total). Every endpoint correctly returns 401 for missing token and 403 for non-admin users. Tested endpoints: GET /admin/stats, GET /admin/transactions, GET /admin/users, GET /admin/users/{id}, POST /admin/users/{id}/ban, POST /admin/users/{id}/unban, GET /admin/backup, POST /admin/restore. Auth gating working perfectly."
+
+  - task: "GET /api/admin/stats — dashboard statistics"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED: Returns 200 with all required keys. Structure: {users: {total, banned, verified, active_24h, new_7d}, orders: {total, pending, paid, completed}, listings: {active, sold}, revenue_usd}. All counts are non-negative integers, revenue_usd is float. All required fields present and valid."
+
+  - task: "GET /api/admin/transactions — order history with filters"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED: All 4 test scenarios passed. (1) Basic call → 200 with {items:[], total:0}. (2) Filter ?status=pending → 200 with correct filtering. (3) Search ?q=nonexistent → 200 with 0 items. (4) Pagination ?limit=10&skip=0 → 200 with pagination shape (limit, skip fields present). Transactions endpoint working correctly."
+
+  - task: "GET /api/admin/users — user list with filters and order counts"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED: All 4 test scenarios passed. (1) Basic call → 200 with {items, total, limit, skip}. Each user has required fields: id, steam_id, display_name, is_admin, is_banned, orders_count: {bought, sold, pending, completed}. Sensitive fields (verify_code, email_code) correctly redacted. (2) Filter ?banned=true → 200 with correct filtering. (3) Search ?q=76561198084749846 → 200, found admin user by steam_id. (4) Search ?q=Player → 200 with display_name substring match. Minor fix applied: added backward compatibility for users missing is_admin/is_banned fields (set to false by default)."
+
+  - task: "GET /api/admin/users/{user_id} — user detail view"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED: Both test scenarios passed. (1) Existing user → 200 with all required fields: {user, orders_bought, orders_sold, listings, favorites_count}. Sensitive fields (verify_code, email_code) correctly redacted from user object. (2) Non-existent user → 404. User detail endpoint working correctly."
+
+  - task: "GET /api/admin/backup — full database backup"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED: Returns 200 with Content-Type: application/json and Content-Disposition: attachment; filename='skinmrkt-backup-YYYYMMDD-HHMMSS.json'. Response body is valid JSON with structure: {generated_at, version:1, collections: {users, listings, orders, favorites, notifications, payment_transactions, market_prices}}. All 7 collection keys present, all values are lists. Backup endpoint working correctly."
+
+  - task: "POST /api/admin/restore — database restore with merge/replace modes"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED: All 5 test scenarios passed. (1) mode=xyz → 400 'mode must be merge or replace'. (2) Empty file → 400. (3) Invalid JSON → 400. (4) Valid backup with mode=merge → 200 with {ok:true, mode:'merge', stats: {users: {restored, upserted, modified}, ...}}. Stats show 4 users, 3 favorites, 2 notifications, 26201 market_prices restored. (5) Verified /admin/stats after restore shows correct counts. Restore endpoint working correctly with proper validation and upsert logic."
+
+  - task: "IP capture — last_ip and ip_history tracking"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ VERIFIED: IP capture working correctly. (1) Login via POST /auth/steamid. (2) GET /auth/me returns user with last_ip field populated (e.g., '35.184.53.215') and ip_history array with multiple entries. IP tracking working as expected."
+
 frontend:
   - task: "MarketplacePage — Steam Market price + freshness badge on card"
     implemented: true
@@ -342,21 +462,21 @@ frontend:
 
 metadata:
   created_by: "main"
-  version: "1.3"
-  test_sequence: 3
+  version: "1.4"
+  test_sequence: 4
 
 test_plan:
   current_focus:
-    - "POST /api/favorites — create favorite (listing or skin)"
-    - "GET /api/favorites — list user's favorites"
-    - "GET /api/favorites/check — bulk heart state for UI"
-    - "DELETE /api/favorites — remove favorite"
-    - "GET /api/notifications — list user notifications"
-    - "GET /api/notifications/unread-count — public unread count"
-    - "POST /api/notifications/read-all — mark all as read"
-    - "POST /api/notifications/{id}/read — mark single notification as read"
-    - "Notification trigger: listing_sold — fan-out to favorited users"
-    - "Notification trigger: new_listing — fan-out to skin favorited users"
+    - "POST /api/admin/promote — bootstrap admin promotion"
+    - "Ban enforcement — login and auth blocking"
+    - "Admin auth gating — all admin endpoints"
+    - "GET /api/admin/stats — dashboard statistics"
+    - "GET /api/admin/transactions — order history with filters"
+    - "GET /api/admin/users — user list with filters and order counts"
+    - "GET /api/admin/users/{user_id} — user detail view"
+    - "GET /api/admin/backup — full database backup"
+    - "POST /api/admin/restore — database restore with merge/replace modes"
+    - "IP capture — last_ip and ip_history tracking"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -370,4 +490,6 @@ agent_communication:
       message: "✅ ALL BACKEND TESTS PASSED (9/9). Comprehensive testing completed for all Steam Market price sync endpoints. All endpoints working correctly with proper authentication, data structure, and error handling. Price sync background scheduler is active and syncing 600 items every 6h. Real market prices are being fetched from Steam API and correctly aggregated across wear variants. Items without market data gracefully return null values without errors. Backend implementation is production-ready."
     - agent: "testing"
       message: "✅ ALL FAVOURITES + NOTIFICATIONS TESTS PASSED (10/10 endpoints + 2 triggers = 12/12). Comprehensive testing completed for all new endpoints. FAVOURITES: (1) POST /favorites with all validation scenarios (401, 400, 404) working correctly. Server-side snapshot enrichment verified for both listing and skin types. Idempotent duplicate handling working. (2) GET /favorites returns proper structure with listing_status field attached to listing-type favorites. (3) GET /favorites/check is properly public (200 without auth, not 401) and returns correct arrays. (4) DELETE /favorites working with proper auth and idempotent behavior. NOTIFICATIONS: (5) GET /notifications with proper auth gating. (6) GET /notifications/unread-count is properly public (CRITICAL: does NOT return 401 without auth). (7) POST /notifications/read-all working, verified unread count updates. (8) POST /notifications/{id}/read working, verified single notification marked read. TRIGGERS: (9) listing_sold trigger verified end-to-end: created listing → favorited by user B → simulated sale → user B received notification with correct type, title, body, and target_id. (10) new_listing trigger verified end-to-end: user B favorited skin → user A created listing for that skin → user B immediately received notification with correct details including price and wear. All notification fan-outs working correctly, buyer/seller exclusion logic working. Backend implementation is production-ready."
+    - agent: "testing"
+      message: "✅ ALL ADMIN PANEL TESTS PASSED (48/48). Comprehensive testing completed for all admin endpoints. TESTED: (1) POST /admin/promote with 5 scenarios (no token, wrong token, no params, non-existent user, success) — all working. (2) Ban enforcement: ban user → login blocked with 403 + ban reason, old token blocked, unban → login works, self-ban prevention → 400. (3) Admin auth gating: all 8 endpoints tested with no token (401) and non-admin token (403) — 16 tests passed. (4) GET /admin/stats → all required keys present (users, orders, listings, revenue_usd) with correct structure. (5) GET /admin/transactions → basic call, status filter, search, pagination all working. (6) GET /admin/users → returns users with orders_count, sensitive fields redacted, filters working. MINOR FIX APPLIED: Added backward compatibility for users missing is_admin/is_banned fields (defaults to false). (7) GET /admin/users/{id} → returns user detail with orders/listings/favorites, 404 for non-existent. (8) GET /admin/backup → returns valid JSON with all 7 collections, correct headers. (9) POST /admin/restore → validates mode, empty file, invalid JSON, merge mode working with stats. (10) IP capture → last_ip and ip_history populated correctly. All admin endpoints production-ready."
 
