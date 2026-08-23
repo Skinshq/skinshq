@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { FaSteam } from "react-icons/fa";
-import { LogOut, ChevronDown, Heart, ShieldAlert } from "lucide-react";
+import { LogOut, ChevronDown, Heart, ShieldAlert, User as UserIcon } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../context/AuthContext";
 import { useCurrency } from "../context/CurrencyContext";
@@ -137,6 +137,11 @@ export default function Navbar() {
                 <ChevronDown className="w-3 h-3" />
               </DropdownMenuTrigger>
               <DropdownMenuContent className="bg-[#121212] border-white/10">
+                <DropdownMenuItem asChild className="cursor-pointer focus:bg-white/10">
+                  <Link to="/me" data-testid="menu-member-panel">
+                    <UserIcon className="w-4 h-4 mr-2" /> Member panel
+                  </Link>
+                </DropdownMenuItem>
                 <DropdownMenuItem asChild className="cursor-pointer focus:bg-white/10">
                   <Link to="/inventory" data-testid="menu-inventory">My Inventory</Link>
                 </DropdownMenuItem>

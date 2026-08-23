@@ -6,6 +6,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 import uuid
+import re
 import jwt
 import httpx
 from pathlib import Path
@@ -143,6 +144,44 @@ class FavoriteCreate(BaseModel):
     # Optional client-provided snapshot (used to render Favorites page even if
     # the underlying doc is later deleted). Server-verified for listing type.
     snapshot: Optional[dict] = None
+
+
+# ---- Member Panel models ----
+
+class ProfileUpdate(BaseModel):
+    trade_url: Optional[str] = None
+    bio: Optional[str] = None
+    socials: Optional[dict] = None   # {twitter, discord, instagram, youtube, twitch}
+
+
+class NotificationPrefs(BaseModel):
+    on_trade_verified: Optional[bool] = None
+    on_item_purchased: Optional[bool] = None
+    on_listing_sold: Optional[bool] = None
+    on_new_listing_for_fav_skin: Optional[bool] = None
+    on_offer_received: Optional[bool] = None
+    on_price_drop: Optional[bool] = None                # premium
+    on_new_listing_in_category: Optional[bool] = None   # premium
+    email_notifications: Optional[bool] = None          # premium
+
+
+class WalletTxn(BaseModel):
+    amount_usd: float
+    note: Optional[str] = None
+
+
+class BuyOrderCreate(BaseModel):
+    skin_name: str
+    master_id: Optional[str] = None
+    max_price_usd: float
+    wear: Optional[str] = None       # optional wear filter
+    note: Optional[str] = None
+
+
+class OfferCreate(BaseModel):
+    listing_id: str
+    price_usd: float
+    message: Optional[str] = None
 
 
 # Helpers for favorites/notifications
@@ -292,6 +331,17 @@ async def seed_catalog():
         await db.notifications.create_index([("user_id", 1), ("read", 1)])
     except Exception as e:
         log.warning(f"notifications index warning: {e}")
+
+    # Member-panel collections
+    try:
+        await db.wallet_txns.create_index([("user_id", 1), ("created_at", -1)])
+        await db.buy_orders.create_index([("user_id", 1), ("created_at", -1)])
+        await db.buy_orders.create_index([("skin_name", 1), ("status", 1)])
+        await db.offers.create_index([("seller_id", 1), ("created_at", -1)])
+        await db.offers.create_index([("buyer_id", 1), ("created_at", -1)])
+        await db.offers.create_index([("listing_id", 1), ("status", 1)])
+    except Exception as e:
+        log.warning(f"member-panel indexes warning: {e}")
 
     # Bootstrap admin login credentials — creates a password-based admin
     # user on first boot if one doesn't already exist for the configured
@@ -819,11 +869,15 @@ async def create_listing(payload: ListingCreate, user=Depends(require_verified))
     }
     await db.listings.insert_one(listing.copy())
     listing.pop("_id", None)
-    # Fan-out: notify anyone who favorited this base skin
+    # Fan-out: notify anyone who favorited this base skin + open buy orders that match
     try:
         await _notify_new_listing_for_skin(listing)
     except Exception as e:
         log.warning(f"new-listing notify failed: {e}")
+    try:
+        await _notify_matching_buy_orders(listing)
+    except Exception as e:
+        log.warning(f"buy-order match notify failed: {e}")
     return listing
 
 
@@ -1148,6 +1202,441 @@ async def mark_all_read(user=Depends(get_current_user)):
         {"$set": {"read": True}}
     )
     return {"ok": True, "updated": res.modified_count}
+
+
+# ---------------- Member Panel ----------------
+
+DEFAULT_NOTIFICATION_PREFS = {
+    "on_trade_verified": True,
+    "on_item_purchased": True,
+    "on_listing_sold": True,
+    "on_new_listing_for_fav_skin": True,
+    "on_offer_received": True,
+    "on_price_drop": False,               # premium
+    "on_new_listing_in_category": False,  # premium
+    "email_notifications": False,         # premium
+}
+
+# Which notification prefs are gated behind a premium subscription
+PREMIUM_PREF_KEYS = {"on_price_drop", "on_new_listing_in_category", "email_notifications"}
+
+
+def _compute_badges(user: dict, stats: dict) -> list[dict]:
+    """Derive earned badges from user stats. Called on-demand — no persistence."""
+    badges = []
+    try:
+        created = datetime.fromisoformat(user.get("created_at").replace("Z", "+00:00"))
+        age_days = (datetime.now(timezone.utc) - created).days
+    except Exception:
+        age_days = 0
+    completed = stats.get("completed_orders", 0)
+    spent = stats.get("total_spent_usd", 0.0)
+    sold = stats.get("listings_sold", 0)
+    trades_all = stats.get("all_orders", 0)
+
+    def add(key, name, description, tier="normal", icon="award"):
+        badges.append({"key": key, "name": name, "description": description, "tier": tier, "icon": icon})
+
+    if user.get("is_admin"):
+        add("admin", "Admin", "Platform administrator", tier="platform", icon="shield")
+    if user.get("is_premium"):
+        add("premium", "Premium", "Premium member with advanced alerts", tier="rare", icon="star")
+    if user.get("is_verified"):
+        add("verified", "Verified Trader", "Confirmed Steam profile ownership", tier="normal", icon="check")
+    if trades_all >= 1:
+        add("first_trade", "First Trade", "Completed your first trade", tier="normal", icon="handshake")
+    if trades_all >= 10:
+        add("regular", "Regular Trader", "10+ trades completed", tier="normal", icon="repeat")
+    if trades_all >= 50:
+        add("veteran_trader", "Veteran Trader", "50+ trades completed", tier="rare", icon="flame")
+    if spent >= 1000:
+        add("whale", "Whale", "Spent $1,000+ on the platform", tier="rare", icon="gem")
+    if spent >= 5000:
+        add("big_spender", "Big Spender", "Spent $5,000+ on the platform", tier="epic", icon="crown")
+    if sold >= 10:
+        add("prolific_seller", "Prolific Seller", "Sold 10+ items", tier="rare", icon="storefront")
+    if age_days >= 30:
+        add("veteran", "Veteran Member", "Member for 30+ days", tier="normal", icon="clock")
+    return badges
+
+
+async def _user_stats(user_id: str) -> dict:
+    orders_bought = await db.orders.count_documents({"buyer_id": user_id})
+    orders_sold = await db.orders.count_documents({"seller_id": user_id})
+    completed = await db.orders.count_documents({
+        "$or": [{"buyer_id": user_id}, {"seller_id": user_id}],
+        "trade_status": "completed",
+    })
+    listings_active = await db.listings.count_documents({"seller_id": user_id, "status": "active"})
+    listings_sold = await db.listings.count_documents({"seller_id": user_id, "status": "sold"})
+
+    spent_pipe = [
+        {"$match": {"buyer_id": user_id, "status": "paid"}},
+        {"$group": {"_id": None, "sum": {"$sum": "$amount_usd"}}},
+    ]
+    spent_docs = await db.orders.aggregate(spent_pipe).to_list(1)
+    total_spent = float(spent_docs[0]["sum"]) if spent_docs else 0.0
+
+    earn_pipe = [
+        {"$match": {"seller_id": user_id, "status": "paid"}},
+        {"$group": {"_id": None, "sum": {"$sum": "$amount_usd"}}},
+    ]
+    earn_docs = await db.orders.aggregate(earn_pipe).to_list(1)
+    total_earned = float(earn_docs[0]["sum"]) if earn_docs else 0.0
+
+    return {
+        "orders_bought": orders_bought,
+        "orders_sold": orders_sold,
+        "all_orders": orders_bought + orders_sold,
+        "completed_orders": completed,
+        "listings_active": listings_active,
+        "listings_sold": listings_sold,
+        "total_spent_usd": round(total_spent, 2),
+        "total_earned_usd": round(total_earned, 2),
+    }
+
+
+# --- Profile ---
+
+_TRADE_URL_RE = re.compile(r"^https?://(www\.)?steamcommunity\.com/tradeoffer/new/\?partner=\d+&token=[A-Za-z0-9_-]+$")
+_SOCIAL_KEYS = {"twitter", "discord", "instagram", "youtube", "twitch"}
+
+
+@api.get("/me/profile")
+async def me_profile(user=Depends(get_current_user)):
+    stats = await _user_stats(user["id"])
+    badges = _compute_badges(user, stats)
+    # Ensure fields exist with defaults for the UI
+    prefs = {**DEFAULT_NOTIFICATION_PREFS, **(user.get("notification_prefs") or {})}
+    profile = {
+        "id": user["id"],
+        "steam_id": user.get("steam_id"),
+        "display_name": user.get("display_name"),
+        "avatar": user.get("avatar"),
+        "profile_url": user.get("profile_url"),
+        "email": user.get("email"),
+        "is_verified": user.get("is_verified", False),
+        "is_premium": user.get("is_premium", False),
+        "is_admin": user.get("is_admin", False),
+        "created_at": user.get("created_at"),
+        "trade_url": user.get("trade_url"),
+        "bio": user.get("bio"),
+        "socials": user.get("socials") or {},
+        "notification_prefs": prefs,
+        "wallet_balance_usd": round(float(user.get("wallet_balance_usd", 0.0)), 2),
+    }
+    return {"profile": profile, "stats": stats, "badges": badges}
+
+
+@api.patch("/me/profile")
+async def update_profile(payload: ProfileUpdate, user=Depends(get_current_user)):
+    upd = {}
+    if payload.trade_url is not None:
+        tu = payload.trade_url.strip()
+        if tu and not _TRADE_URL_RE.match(tu):
+            raise HTTPException(400, "Trade URL must look like https://steamcommunity.com/tradeoffer/new/?partner=…&token=…")
+        upd["trade_url"] = tu or None
+    if payload.bio is not None:
+        upd["bio"] = payload.bio.strip()[:280] or None
+    if payload.socials is not None:
+        clean = {}
+        for k, v in (payload.socials or {}).items():
+            if k in _SOCIAL_KEYS and isinstance(v, str):
+                v = v.strip()[:120]
+                if v:
+                    clean[k] = v
+        upd["socials"] = clean
+    if not upd:
+        return {"ok": True, "updated": 0}
+    await db.users.update_one({"id": user["id"]}, {"$set": upd})
+    fresh = await db.users.find_one({"id": user["id"]}, {"_id": 0, "admin_password_hash": 0,
+                                                          "verify_code": 0, "email_code": 0})
+    return {"ok": True, "updated": len(upd), "user": fresh}
+
+
+@api.patch("/me/notifications")
+async def update_notification_prefs(payload: NotificationPrefs, user=Depends(get_current_user)):
+    curr = {**DEFAULT_NOTIFICATION_PREFS, **(user.get("notification_prefs") or {})}
+    incoming = payload.dict(exclude_unset=True)
+    # Gate premium keys
+    if not user.get("is_premium"):
+        for pk in PREMIUM_PREF_KEYS:
+            if pk in incoming and incoming[pk] and not curr.get(pk):
+                raise HTTPException(403, f"'{pk}' requires a Premium membership")
+    curr.update(incoming)
+    await db.users.update_one({"id": user["id"]}, {"$set": {"notification_prefs": curr}})
+    return {"ok": True, "notification_prefs": curr}
+
+
+# --- Wallet & Ledger (MOCKED top-ups/withdrawals) ---
+
+async def _record_wallet_txn(user_id: str, kind: str, amount_usd: float,
+                              note: str = "", ref_id: Optional[str] = None) -> dict:
+    """Append a ledger entry AND update the user's cached balance atomically.
+    'kind' is one of: deposit, withdraw, purchase, sale, refund."""
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "kind": kind,
+        "amount_usd": round(float(amount_usd), 2),  # positive=in, negative=out
+        "note": note or "",
+        "ref_id": ref_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.wallet_txns.insert_one(doc)
+    await db.users.update_one({"id": user_id},
+                                {"$inc": {"wallet_balance_usd": doc["amount_usd"]}})
+    doc.pop("_id", None)
+    return doc
+
+
+@api.get("/me/wallet")
+async def me_wallet(limit: int = 50, user=Depends(get_current_user)):
+    balance = round(float(user.get("wallet_balance_usd", 0.0)), 2)
+    txns = await db.wallet_txns.find({"user_id": user["id"]}, {"_id": 0}) \
+        .sort([("created_at", -1)]).limit(limit).to_list(limit)
+    return {"balance_usd": balance, "transactions": txns}
+
+
+@api.post("/me/wallet/deposit")
+async def wallet_deposit(payload: WalletTxn, user=Depends(get_current_user)):
+    """MOCKED deposit — instantly credits the wallet. Real integration would go
+    through Stripe. See /wallet-note in the UI for the disclosure."""
+    if payload.amount_usd <= 0:
+        raise HTTPException(400, "Amount must be positive")
+    if payload.amount_usd > 10000:
+        raise HTTPException(400, "Deposit cap is $10,000 in demo mode")
+    txn = await _record_wallet_txn(user["id"], "deposit", payload.amount_usd,
+                                     note=payload.note or "Demo deposit")
+    return {"ok": True, "transaction": txn,
+            "new_balance": round(user.get("wallet_balance_usd", 0.0) + payload.amount_usd, 2)}
+
+
+@api.post("/me/wallet/withdraw")
+async def wallet_withdraw(payload: WalletTxn, user=Depends(get_current_user)):
+    if payload.amount_usd <= 0:
+        raise HTTPException(400, "Amount must be positive")
+    curr = float(user.get("wallet_balance_usd", 0.0))
+    if payload.amount_usd > curr:
+        raise HTTPException(400, f"Insufficient balance (${curr:.2f})")
+    txn = await _record_wallet_txn(user["id"], "withdraw", -payload.amount_usd,
+                                     note=payload.note or "Demo withdrawal")
+    return {"ok": True, "transaction": txn,
+            "new_balance": round(curr - payload.amount_usd, 2)}
+
+
+# --- Transactions (my trades) ---
+
+@api.get("/me/orders")
+async def me_orders(user=Depends(get_current_user)):
+    bought = await db.orders.find({"buyer_id": user["id"]}, {"_id": 0}) \
+        .sort([("created_at", -1)]).to_list(200)
+    sold = await db.orders.find({"seller_id": user["id"]}, {"_id": 0}) \
+        .sort([("created_at", -1)]).to_list(200)
+    return {"bought": bought, "sold": sold}
+
+
+# --- Buy Orders ---
+
+@api.post("/buy-orders")
+async def create_buy_order(payload: BuyOrderCreate, user=Depends(get_current_user)):
+    if payload.max_price_usd <= 0:
+        raise HTTPException(400, "max_price_usd must be positive")
+    # Require enough wallet balance to cover the potential buy
+    balance = float(user.get("wallet_balance_usd", 0.0))
+    if balance < payload.max_price_usd:
+        raise HTTPException(400,
+            f"Insufficient wallet balance. Need ${payload.max_price_usd:.2f}, have ${balance:.2f}. Deposit first.")
+    # Verify master skin exists if master_id provided
+    if payload.master_id:
+        m = await db.skins_master.find_one({"master_id": payload.master_id}, {"_id": 0, "image": 1, "rarity": 1, "name": 1})
+    else:
+        m = await db.skins_master.find_one({"name": payload.skin_name}, {"_id": 0, "image": 1, "rarity": 1, "master_id": 1})
+    if not m:
+        raise HTTPException(404, "Skin not found")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "user_name": user.get("display_name"),
+        "skin_name": payload.skin_name,
+        "master_id": payload.master_id or m.get("master_id"),
+        "max_price_usd": round(float(payload.max_price_usd), 2),
+        "wear": payload.wear,
+        "note": (payload.note or "").strip()[:200],
+        "image": m.get("image"),
+        "rarity": m.get("rarity"),
+        "status": "open",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.buy_orders.insert_one(doc.copy())
+    doc.pop("_id", None)
+    return doc
+
+
+@api.get("/buy-orders")
+async def list_my_buy_orders(user=Depends(get_current_user)):
+    items = await db.buy_orders.find({"user_id": user["id"]}, {"_id": 0}) \
+        .sort([("created_at", -1)]).to_list(200)
+    # Attach current live listing count matching each buy order
+    for b in items:
+        b["matching_listings"] = await db.listings.count_documents({
+            "skin_name": b["skin_name"],
+            "status": "active",
+            "price_usd": {"$lte": b["max_price_usd"]},
+            **({"wear": b["wear"]} if b.get("wear") else {}),
+        })
+    return {"items": items, "count": len(items)}
+
+
+@api.delete("/buy-orders/{order_id}")
+async def cancel_buy_order(order_id: str, user=Depends(get_current_user)):
+    res = await db.buy_orders.delete_one({"id": order_id, "user_id": user["id"]})
+    if not res.deleted_count:
+        raise HTTPException(404, "Buy order not found")
+    return {"ok": True}
+
+
+async def _notify_matching_buy_orders(listing: dict):
+    """When a new listing appears, notify buyers with an open buy order that matches."""
+    price = listing.get("price_usd", 0)
+    wear = listing.get("wear")
+    matches = await db.buy_orders.find({
+        "skin_name": listing.get("skin_name"),
+        "status": "open",
+        "max_price_usd": {"$gte": price},
+        "$or": [{"wear": None}, {"wear": wear}],
+    }, {"_id": 0}).to_list(500)
+    for b in matches:
+        if b["user_id"] == listing.get("seller_id"):
+            continue
+        await _create_notification(
+            user_id=b["user_id"],
+            ntype="buy_order_match",
+            title="Buy order match",
+            body=f"{listing.get('skin_name')} ({wear or 'any wear'}) is now on sale at ${price:.2f} — within your ${b['max_price_usd']:.2f} budget.",
+            target_type="listing",
+            target_id=listing.get("id"),
+            snapshot={
+                "skin_name": listing.get("skin_name"),
+                "wear": wear,
+                "image": listing.get("image"),
+                "rarity": listing.get("rarity"),
+                "price_usd": price,
+                "listing_id": listing.get("id"),
+            },
+        )
+
+
+# --- Offers ---
+
+@api.post("/offers")
+async def create_offer(payload: OfferCreate, user=Depends(get_current_user)):
+    if payload.price_usd <= 0:
+        raise HTTPException(400, "price_usd must be positive")
+    l = await db.listings.find_one({"id": payload.listing_id}, {"_id": 0})
+    if not l:
+        raise HTTPException(404, "Listing not found")
+    if l.get("status") != "active":
+        raise HTTPException(400, "Listing is not active")
+    if l.get("seller_id") == user["id"]:
+        raise HTTPException(400, "You can't offer on your own listing")
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "listing_id": l["id"],
+        "listing_snapshot": {
+            "skin_name": l.get("skin_name"), "wear": l.get("wear"),
+            "image": l.get("image"), "rarity": l.get("rarity"),
+            "list_price_usd": l.get("price_usd"),
+        },
+        "buyer_id": user["id"],
+        "buyer_name": user.get("display_name"),
+        "seller_id": l.get("seller_id"),
+        "seller_name": l.get("seller_name"),
+        "price_usd": round(float(payload.price_usd), 2),
+        "message": (payload.message or "").strip()[:300],
+        "status": "pending",   # pending | accepted | rejected | cancelled
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.offers.insert_one(doc.copy())
+    doc.pop("_id", None)
+    # Notify the seller
+    await _create_notification(
+        user_id=doc["seller_id"],
+        ntype="offer_received",
+        title="New offer received",
+        body=f"{user.get('display_name')} offered ${doc['price_usd']:.2f} for your {l.get('skin_name')} (listed at ${l.get('price_usd'):.2f}).",
+        target_type="listing",
+        target_id=l["id"],
+        snapshot=doc["listing_snapshot"],
+    )
+    return doc
+
+
+@api.get("/offers")
+async def list_offers(direction: str = "received", user=Depends(get_current_user)):
+    """direction=received (offers on my listings) or sent (my outgoing offers)."""
+    field = "seller_id" if direction == "received" else "buyer_id"
+    items = await db.offers.find({field: user["id"]}, {"_id": 0}) \
+        .sort([("created_at", -1)]).to_list(200)
+    return {"items": items, "count": len(items), "direction": direction}
+
+
+@api.post("/offers/{offer_id}/accept")
+async def accept_offer(offer_id: str, user=Depends(get_current_user)):
+    o = await db.offers.find_one({"id": offer_id}, {"_id": 0})
+    if not o:
+        raise HTTPException(404, "Offer not found")
+    if o.get("seller_id") != user["id"]:
+        raise HTTPException(403, "Only the seller can accept")
+    if o.get("status") != "pending":
+        raise HTTPException(400, f"Offer already {o.get('status')}")
+    # Drop the listing price to the accepted offer price so a normal checkout works
+    await db.listings.update_one({"id": o["listing_id"]},
+                                  {"$set": {"price_usd": o["price_usd"]}})
+    await db.offers.update_one({"id": offer_id},
+                                {"$set": {"status": "accepted",
+                                          "accepted_at": datetime.now(timezone.utc).isoformat()}})
+    # Reject all OTHER pending offers on the same listing
+    await db.offers.update_many({"listing_id": o["listing_id"], "status": "pending",
+                                  "id": {"$ne": offer_id}},
+                                 {"$set": {"status": "rejected",
+                                           "rejected_at": datetime.now(timezone.utc).isoformat()}})
+    # Notify the buyer their offer was accepted
+    await _create_notification(
+        user_id=o["buyer_id"],
+        ntype="offer_accepted",
+        title="Your offer was accepted",
+        body=f"{o.get('seller_name')} accepted your ${o['price_usd']:.2f} offer for {o['listing_snapshot'].get('skin_name')}. Go to the listing to check out.",
+        target_type="listing",
+        target_id=o["listing_id"],
+        snapshot=o["listing_snapshot"],
+    )
+    return {"ok": True, "listing_id": o["listing_id"], "new_price_usd": o["price_usd"]}
+
+
+@api.post("/offers/{offer_id}/reject")
+async def reject_offer(offer_id: str, user=Depends(get_current_user)):
+    o = await db.offers.find_one({"id": offer_id}, {"_id": 0})
+    if not o:
+        raise HTTPException(404, "Offer not found")
+    if o.get("seller_id") != user["id"]:
+        raise HTTPException(403, "Only the seller can reject")
+    if o.get("status") != "pending":
+        raise HTTPException(400, f"Offer already {o.get('status')}")
+    await db.offers.update_one({"id": offer_id},
+                                {"$set": {"status": "rejected",
+                                          "rejected_at": datetime.now(timezone.utc).isoformat()}})
+    await _create_notification(
+        user_id=o["buyer_id"],
+        ntype="offer_rejected",
+        title="Offer rejected",
+        body=f"{o.get('seller_name')} declined your ${o['price_usd']:.2f} offer for {o['listing_snapshot'].get('skin_name')}.",
+        target_type="listing",
+        target_id=o["listing_id"],
+        snapshot=o["listing_snapshot"],
+    )
+    return {"ok": True}
 
 
 # ---------------- Admin Panel ----------------

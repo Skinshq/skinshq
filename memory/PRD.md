@@ -41,6 +41,44 @@ User wants a marketplace to buy/sell CS2 skins where users login via Steam ID, s
 - Background asyncio scheduler refreshes prices every 6h, defaults to
   top-6000 most-listed items per run (fast + rate-limit friendly)
 
+## Member Panel (Aug 2026)
+- New `/me` page with 6 tabs:
+  - **Profile** — Steam Trade URL (regex-validated), bio (280 chars),
+    5 social links (Twitter, Discord, Instagram, YouTube, Twitch),
+    trader stats grid, badges list.
+  - **Wallet** — big balance card, green Deposit / red Withdraw buttons,
+    ledger history table. **MOCKED** — real Stripe wallet top-ups deferred.
+  - **Trades** — my purchases + my sales tables.
+  - **Buy Orders** — post-a-buy-order form (skin, max price, optional wear,
+    note). Requires wallet balance to cover max price. Shows live-listing
+    match count per row.
+  - **Offers** — sent / received tabs. Sellers can accept (drops listing
+    price to offer price) or reject.
+  - **Notifications** — 8 toggle preferences; 3 gated behind `is_premium`
+    with visible Premium badges + lock disclosure.
+- **Badge system** — 8 auto-computed badges from user stats:
+  First Trade, Regular (10+), Veteran Trader (50+), Whale ($1k+),
+  Big Spender ($5k+), Prolific Seller (10+ sold), Verified, Veteran (30d+),
+  plus platform badges Premium and Admin. Tiered visual styling
+  (normal/rare/epic/platform).
+- **New collections**: `wallet_txns`, `buy_orders`, `offers` with proper indexes.
+- **Endpoints** (all under /api):
+  - `GET/PATCH /me/profile`, `PATCH /me/notifications`
+  - `GET /me/wallet`, `POST /me/wallet/deposit|withdraw`
+  - `GET /me/orders`
+  - `POST/GET /buy-orders`, `DELETE /buy-orders/{id}`
+  - `POST /offers`, `GET /offers?direction=received|sent`,
+    `POST /offers/{id}/accept|reject`
+- **Buy-order matching**: on new listing creation, backend fans out
+  notifications to every open buy order whose criteria match
+  (skin_name + price ≤ max_price + wear filter). Full auto-execute
+  (pre-authorized Stripe charge) is deferred.
+- **Offer flow**: creating an offer notifies the seller. Accepting drops
+  the listing price to the offer amount, auto-rejects any competing pending
+  offers, and notifies the buyer to complete a normal checkout.
+- Trade URL validated to standard steamcommunity `/tradeoffer/new/?partner=…&token=…` shape.
+- Premium prefs are 403-guarded server-side so users can't force them on.
+
 ## Admin Login Window (Aug 2026)
 - Password-based admin login endpoint `POST /api/admin/login` (email +
   bcrypt-hashed password on the user doc) returns the same JWT shape as
