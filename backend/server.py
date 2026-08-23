@@ -115,6 +115,13 @@ async def get_admin_user(user=Depends(get_current_user)) -> dict:
     return user
 
 
+async def get_moderator_user(user=Depends(get_current_user)) -> dict:
+    """Allows admins OR moderators. Used for view-only mod endpoints."""
+    if not (user.get("is_admin") or user.get("is_moderator")):
+        raise HTTPException(403, "Moderator or admin only")
+    return user
+
+
 async def get_current_user_optional(authorization: Optional[str] = Header(None)) -> Optional[dict]:
     if not authorization or not authorization.startswith("Bearer "):
         return None
@@ -182,6 +189,21 @@ class OfferCreate(BaseModel):
     listing_id: str
     price_usd: float
     message: Optional[str] = None
+
+
+class TicketCreate(BaseModel):
+    subject: str
+    body: str
+    category: Optional[str] = None       # e.g. trade_issue | payment | account | other
+    order_id: Optional[str] = None       # optional link to a specific order
+
+
+class TicketMessage(BaseModel):
+    body: str
+
+
+class ModeratorToggle(BaseModel):
+    is_moderator: bool
 
 
 # Helpers for favorites/notifications
@@ -340,6 +362,8 @@ async def seed_catalog():
         await db.offers.create_index([("seller_id", 1), ("created_at", -1)])
         await db.offers.create_index([("buyer_id", 1), ("created_at", -1)])
         await db.offers.create_index([("listing_id", 1), ("status", 1)])
+        await db.support_tickets.create_index([("user_id", 1), ("updated_at", -1)])
+        await db.support_tickets.create_index([("status", 1), ("updated_at", -1)])
     except Exception as e:
         log.warning(f"member-panel indexes warning: {e}")
 
@@ -1639,6 +1663,178 @@ async def reject_offer(offer_id: str, user=Depends(get_current_user)):
     return {"ok": True}
 
 
+# ---------------- Support Tickets (users) ----------------
+
+VALID_TICKET_CATEGORIES = {"trade_issue", "payment", "account", "listing", "other"}
+VALID_TICKET_STATUSES = {"open", "pending_reply", "resolved", "closed"}
+
+
+@api.post("/support/tickets")
+async def create_ticket(payload: TicketCreate, user=Depends(get_current_user)):
+    subject = (payload.subject or "").strip()
+    body = (payload.body or "").strip()
+    if not subject or len(subject) < 3:
+        raise HTTPException(400, "Subject too short")
+    if not body or len(body) < 10:
+        raise HTTPException(400, "Body too short (min 10 chars)")
+    cat = payload.category or "other"
+    if cat not in VALID_TICKET_CATEGORIES:
+        cat = "other"
+
+    order_snapshot = None
+    if payload.order_id:
+        order = await db.orders.find_one({"id": payload.order_id, "buyer_id": user["id"]},
+                                           {"_id": 0, "id": 1, "listing_snapshot": 1,
+                                            "amount_usd": 1, "status": 1})
+        if order:
+            order_snapshot = order
+
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "user_name": user.get("display_name"),
+        "user_avatar": user.get("avatar"),
+        "user_steam_id": user.get("steam_id"),
+        "subject": subject[:200],
+        "category": cat,
+        "status": "open",
+        "order_id": payload.order_id,
+        "order_snapshot": order_snapshot,
+        "messages": [{
+            "id": str(uuid.uuid4()),
+            "author_id": user["id"],
+            "author_name": user.get("display_name"),
+            "author_role": "user",
+            "body": body[:4000],
+            "created_at": now,
+        }],
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.support_tickets.insert_one(doc.copy())
+    doc.pop("_id", None)
+    return doc
+
+
+@api.get("/support/tickets")
+async def list_my_tickets(user=Depends(get_current_user)):
+    items = await db.support_tickets.find({"user_id": user["id"]},
+                                            {"_id": 0, "messages": 0}) \
+        .sort([("updated_at", -1)]).to_list(200)
+    return {"items": items, "count": len(items)}
+
+
+@api.get("/support/tickets/{ticket_id}")
+async def get_my_ticket(ticket_id: str, user=Depends(get_current_user)):
+    doc = await db.support_tickets.find_one({"id": ticket_id, "user_id": user["id"]},
+                                              {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Ticket not found")
+    return doc
+
+
+@api.post("/support/tickets/{ticket_id}/messages")
+async def add_ticket_message(ticket_id: str, payload: TicketMessage,
+                              user=Depends(get_current_user)):
+    body = (payload.body or "").strip()
+    if not body or len(body) < 2:
+        raise HTTPException(400, "Message too short")
+    doc = await db.support_tickets.find_one({"id": ticket_id, "user_id": user["id"]},
+                                              {"_id": 0, "status": 1})
+    if not doc:
+        raise HTTPException(404, "Ticket not found")
+    if doc["status"] == "closed":
+        raise HTTPException(400, "Ticket is closed. Open a new one.")
+    msg = {
+        "id": str(uuid.uuid4()),
+        "author_id": user["id"],
+        "author_name": user.get("display_name"),
+        "author_role": "user",
+        "body": body[:4000],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.support_tickets.update_one(
+        {"id": ticket_id},
+        {"$push": {"messages": msg},
+         "$set": {"status": "open", "updated_at": msg["created_at"]}},
+    )
+    return {"ok": True, "message": msg}
+
+
+# ---------------- Moderator (VIEW-ONLY) ----------------
+
+@api.get("/mod/stats")
+async def mod_stats(_: dict = Depends(get_moderator_user)):
+    """A compact view for moderators — orders + tickets counts, no user data."""
+    orders_total = await db.orders.count_documents({})
+    orders_pending = await db.orders.count_documents({"status": "pending"})
+    orders_paid = await db.orders.count_documents({"status": "paid"})
+    tickets_open = await db.support_tickets.count_documents({"status": {"$in": ["open", "pending_reply"]}})
+    tickets_total = await db.support_tickets.count_documents({})
+    return {
+        "orders": {"total": orders_total, "pending": orders_pending, "paid": orders_paid},
+        "tickets": {"open": tickets_open, "total": tickets_total},
+    }
+
+
+@api.get("/mod/transactions")
+async def mod_transactions(status: Optional[str] = None,
+                            q: Optional[str] = None,
+                            limit: int = 100,
+                            skip: int = 0,
+                            _: dict = Depends(get_moderator_user)):
+    """View-only version of /admin/transactions. Same shape, no mutation
+    endpoints exist for moderators."""
+    filt = {}
+    if status:
+        filt["status"] = status
+    if q:
+        filt["$or"] = [
+            {"id": q},
+            {"listing_snapshot.skin_name": {"$regex": q, "$options": "i"}},
+            {"buyer_name": {"$regex": q, "$options": "i"}},
+            {"seller_name": {"$regex": q, "$options": "i"}},
+        ]
+    total = await db.orders.count_documents(filt)
+    items = await db.orders.find(filt, {"_id": 0}) \
+        .sort([("created_at", -1)]).skip(skip).limit(limit).to_list(limit)
+    return {"items": items, "total": total, "limit": limit, "skip": skip}
+
+
+@api.get("/mod/tickets")
+async def mod_tickets(status: Optional[str] = None,
+                       q: Optional[str] = None,
+                       limit: int = 100,
+                       skip: int = 0,
+                       _: dict = Depends(get_moderator_user)):
+    """View-only ticket list for moderators."""
+    filt = {}
+    if status:
+        if status not in VALID_TICKET_STATUSES:
+            raise HTTPException(400, "invalid status")
+        filt["status"] = status
+    if q:
+        filt["$or"] = [
+            {"id": q},
+            {"subject": {"$regex": q, "$options": "i"}},
+            {"user_name": {"$regex": q, "$options": "i"}},
+            {"user_steam_id": {"$regex": q}},
+        ]
+    total = await db.support_tickets.count_documents(filt)
+    items = await db.support_tickets.find(filt, {"_id": 0, "messages": 0}) \
+        .sort([("updated_at", -1)]).skip(skip).limit(limit).to_list(limit)
+    return {"items": items, "total": total, "limit": limit, "skip": skip}
+
+
+@api.get("/mod/tickets/{ticket_id}")
+async def mod_ticket_detail(ticket_id: str, _: dict = Depends(get_moderator_user)):
+    doc = await db.support_tickets.find_one({"id": ticket_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Ticket not found")
+    return doc
+
+
 # ---------------- Admin Panel ----------------
 
 class AdminLogin(BaseModel):
@@ -1866,10 +2062,112 @@ async def admin_unban_user(user_id: str, _: dict = Depends(get_admin_user)):
     return {"ok": True, "banned": False}
 
 
+@api.post("/admin/users/{user_id}/moderator")
+async def admin_toggle_moderator(user_id: str, payload: ModeratorToggle,
+                                   admin: dict = Depends(get_admin_user)):
+    """Promote or demote a user's moderator flag (view-only trusted role)."""
+    if admin["id"] == user_id and payload.is_moderator is False:
+        raise HTTPException(400, "You cannot demote your own moderator role from here")
+    res = await db.users.update_one({"id": user_id},
+                                      {"$set": {"is_moderator": bool(payload.is_moderator)}})
+    if not res.matched_count:
+        raise HTTPException(404, "User not found")
+    return {"ok": True, "is_moderator": bool(payload.is_moderator)}
+
+
+# --- Admin support ticket management ---
+
+@api.get("/admin/tickets")
+async def admin_tickets(status: Optional[str] = None,
+                         q: Optional[str] = None,
+                         limit: int = 100,
+                         skip: int = 0,
+                         _: dict = Depends(get_admin_user)):
+    filt = {}
+    if status:
+        filt["status"] = status
+    if q:
+        filt["$or"] = [
+            {"id": q},
+            {"subject": {"$regex": q, "$options": "i"}},
+            {"user_name": {"$regex": q, "$options": "i"}},
+            {"user_steam_id": {"$regex": q}},
+        ]
+    total = await db.support_tickets.count_documents(filt)
+    items = await db.support_tickets.find(filt, {"_id": 0, "messages": 0}) \
+        .sort([("updated_at", -1)]).skip(skip).limit(limit).to_list(limit)
+    return {"items": items, "total": total, "limit": limit, "skip": skip}
+
+
+@api.get("/admin/tickets/{ticket_id}")
+async def admin_ticket_detail(ticket_id: str, _: dict = Depends(get_admin_user)):
+    doc = await db.support_tickets.find_one({"id": ticket_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Ticket not found")
+    return doc
+
+
+@api.post("/admin/tickets/{ticket_id}/reply")
+async def admin_reply_ticket(ticket_id: str, payload: TicketMessage,
+                              admin: dict = Depends(get_admin_user)):
+    body = (payload.body or "").strip()
+    if not body or len(body) < 2:
+        raise HTTPException(400, "Message too short")
+    doc = await db.support_tickets.find_one({"id": ticket_id}, {"_id": 0, "user_id": 1})
+    if not doc:
+        raise HTTPException(404, "Ticket not found")
+    now = datetime.now(timezone.utc).isoformat()
+    msg = {
+        "id": str(uuid.uuid4()),
+        "author_id": admin["id"],
+        "author_name": admin.get("display_name") or "Admin",
+        "author_role": "admin",
+        "body": body[:4000],
+        "created_at": now,
+    }
+    await db.support_tickets.update_one(
+        {"id": ticket_id},
+        {"$push": {"messages": msg},
+         "$set": {"status": "pending_reply", "updated_at": now}},
+    )
+    # Notify the ticket owner
+    await _create_notification(
+        user_id=doc["user_id"],
+        ntype="ticket_reply",
+        title="Support replied",
+        body=body[:120] + ("…" if len(body) > 120 else ""),
+        target_type="ticket",
+        target_id=ticket_id,
+    )
+    return {"ok": True, "message": msg}
+
+
+@api.post("/admin/tickets/{ticket_id}/close")
+async def admin_close_ticket(ticket_id: str, _: dict = Depends(get_admin_user)):
+    doc = await db.support_tickets.find_one({"id": ticket_id}, {"_id": 0, "user_id": 1, "status": 1})
+    if not doc:
+        raise HTTPException(404, "Ticket not found")
+    await db.support_tickets.update_one(
+        {"id": ticket_id},
+        {"$set": {"status": "closed", "closed_at": datetime.now(timezone.utc).isoformat(),
+                  "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    await _create_notification(
+        user_id=doc["user_id"],
+        ntype="ticket_closed",
+        title="Support ticket closed",
+        body="Your support ticket was marked resolved and closed. Open a new one if you need more help.",
+        target_type="ticket",
+        target_id=ticket_id,
+    )
+    return {"ok": True}
+
+
 # --- Backup & Restore ---
 
 BACKUP_COLLECTIONS = ["users", "listings", "orders", "favorites", "notifications",
-                       "payment_transactions", "market_prices"]
+                       "payment_transactions", "market_prices", "wallet_txns",
+                       "buy_orders", "offers", "support_tickets"]
 
 
 @api.get("/admin/backup")
@@ -1916,6 +2214,8 @@ async def admin_restore(file: UploadFile = File(...),
         "favorites": "id", "notifications": "id",
         "payment_transactions": "session_id",
         "market_prices": "market_hash_name",
+        "wallet_txns": "id", "buy_orders": "id", "offers": "id",
+        "support_tickets": "id",
     }
 
     stats = {}

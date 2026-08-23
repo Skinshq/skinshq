@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { FaSteam } from "react-icons/fa";
-import { LogOut, ChevronDown, Heart, ShieldAlert, User as UserIcon } from "lucide-react";
+import { LogOut, ChevronDown, Heart, ShieldAlert, User as UserIcon, LifeBuoy, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../context/AuthContext";
 import { useCurrency } from "../context/CurrencyContext";
@@ -134,6 +134,9 @@ export default function Navbar() {
                 {user.is_admin && (
                   <span className="text-[9px] font-mono bg-[#E4AE39]/15 text-[#E4AE39] px-1.5 py-0.5 rounded-sm uppercase tracking-widest">Admin</span>
                 )}
+                {!user.is_admin && user.is_moderator && (
+                  <span className="text-[9px] font-mono bg-[#3B82F6]/15 text-[#60A5FA] px-1.5 py-0.5 rounded-sm uppercase tracking-widest">Mod</span>
+                )}
                 <ChevronDown className="w-3 h-3" />
               </DropdownMenuTrigger>
               <DropdownMenuContent className="bg-[#121212] border-white/10">
@@ -153,6 +156,18 @@ export default function Navbar() {
                     <Heart className="w-4 h-4 mr-2 text-[#EB4B4B]" /> Favourites
                   </Link>
                 </DropdownMenuItem>
+                <DropdownMenuItem asChild className="cursor-pointer focus:bg-white/10">
+                  <Link to="/support" data-testid="menu-support">
+                    <LifeBuoy className="w-4 h-4 mr-2 text-[#E4AE39]" /> Support
+                  </Link>
+                </DropdownMenuItem>
+                {(user.is_moderator || user.is_admin) && (
+                  <DropdownMenuItem asChild className="cursor-pointer focus:bg-white/10">
+                    <Link to="/mod" data-testid="menu-mod">
+                      <ShieldCheck className="w-4 h-4 mr-2 text-[#60A5FA]" /> Moderator panel
+                    </Link>
+                  </DropdownMenuItem>
+                )}
                 {user.is_admin && (
                   <DropdownMenuItem asChild className="cursor-pointer focus:bg-white/10">
                     <Link to="/admin" data-testid="menu-admin">

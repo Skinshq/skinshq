@@ -3,8 +3,7 @@ import { Link, Navigate } from "react-router-dom";
 import {
   ShieldAlert, Users, Receipt, Database, LayoutDashboard,
   Search, Ban, ShieldCheck, DollarSign, Package2, TrendingUp,
-  Download, Upload, RefreshCw,
-} from "lucide-react";
+  Download, Upload, RefreshCw,} from "lucide-react";
 import { toast } from "sonner";
 import api from "../lib/api";
 import { useAuth } from "../context/AuthContext";
@@ -228,6 +227,17 @@ function UsersTab() {
     } catch (e) { toast.error(e?.response?.data?.detail || "Unban failed"); }
   };
 
+  const toggleModerator = async () => {
+    if (!selected) return;
+    const next = !selected.is_moderator;
+    try {
+      await api.post(`/admin/users/${selected.id}/moderator`, { is_moderator: next });
+      toast.success(next ? "Promoted to moderator" : "Moderator role removed");
+      load();
+      openDetail(selected);
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+  };
+
   return (
     <div>
       <div className="flex flex-wrap gap-2 mb-4">
@@ -363,6 +373,14 @@ function UsersTab() {
           )}
 
           <DialogFooter>
+            <button onClick={toggleModerator} data-testid="user-toggle-moderator"
+              className={`flex items-center gap-1 px-4 py-2 rounded-sm text-xs uppercase tracking-widest font-bold ${
+                detail?.user.is_moderator
+                  ? "bg-[#3B82F6]/15 hover:bg-[#3B82F6]/25 text-[#60A5FA] border border-[#3B82F6]/30"
+                  : "bg-white/5 hover:bg-white/10 text-[#E0E0E0] border border-white/10"
+              }`}>
+              <ShieldCheck className="w-3 h-3" /> {detail?.user.is_moderator ? "Remove moderator" : "Make moderator"}
+            </button>
             {detail?.user.is_banned ? (
               <button onClick={doUnban} data-testid="user-unban"
                 className="flex items-center gap-1 bg-[#2ECC71] hover:bg-[#40D57F] text-[#0A0A0A] font-bold px-4 py-2 rounded-sm text-xs uppercase tracking-widest">

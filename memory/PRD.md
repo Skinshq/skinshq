@@ -41,6 +41,33 @@ User wants a marketplace to buy/sell CS2 skins where users login via Steam ID, s
 - Background asyncio scheduler refreshes prices every 6h, defaults to
   top-6000 most-listed items per run (fast + rate-limit friendly)
 
+## Moderator Access + Support Tickets (Aug 2026)
+- New `is_moderator` field on users. New `get_moderator_user` dep allows
+  admin OR moderator (read-only).
+- New `support_tickets` collection with embedded messages array.
+- **User endpoints** (support): `POST/GET /support/tickets`,
+  `GET /support/tickets/{id}`, `POST /support/tickets/{id}/messages`.
+  Users can open tickets, add follow-ups, view the full thread.
+- **Moderator endpoints (VIEW-ONLY)**: `GET /mod/stats`,
+  `GET /mod/transactions`, `GET /mod/tickets`, `GET /mod/tickets/{id}`.
+- **Admin write endpoints**: `GET/POST /admin/tickets`,
+  `POST /admin/tickets/{id}/reply`, `POST /admin/tickets/{id}/close`,
+  `POST /admin/users/{id}/moderator` (promote/demote).
+- Admin reply auto-notifies the ticket owner (`ticket_reply`
+  notification); closing sends `ticket_closed`.
+- New pages:
+  - `/support` — user help centre, open/list/thread view for own tickets.
+  - `/mod` — Moderator panel with Trades + Support Tickets tabs,
+    both read-only. Header includes live-trades and open-tickets counters.
+    Ticket detail page displays "🔒 Moderators have read-only access.
+    Only admins can reply or close." disclosure.
+- Admin User detail dialog now has a "Make moderator / Remove moderator"
+  toggle button.
+- Navbar: "Support" link for logged-in users, "Moderator panel" link for
+  mods/admins, "Mod" badge next to display name when user is moderator
+  (Admin badge takes precedence when both).
+- Backup + restore extended to include `support_tickets` collection.
+
 ## Member Panel (Aug 2026)
 - New `/me` page with 6 tabs:
   - **Profile** — Steam Trade URL (regex-validated), bio (280 chars),

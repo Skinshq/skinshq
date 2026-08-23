@@ -17,6 +17,8 @@ import FavoritesPage from "@/pages/FavoritesPage";
 import AdminPage from "@/pages/AdminPage";
 import AdminLoginPage from "@/pages/AdminLoginPage";
 import MemberPanel from "@/pages/MemberPanel";
+import SupportPage from "@/pages/SupportPage";
+import ModeratorPage from "@/pages/ModeratorPage";
 import CheckoutSuccess from "@/pages/CheckoutSuccess";
 import CheckoutCancel from "@/pages/CheckoutCancel";
 import SteamCallback from "@/pages/SteamCallback";
@@ -39,6 +41,8 @@ function App() {
                 <Route path="/orders" element={<OrdersPage />} />
                 <Route path="/favorites" element={<FavoritesPage />} />
                 <Route path="/me" element={<MemberPanel />} />
+                <Route path="/support" element={<SupportPage />} />
+                <Route path="/mod" element={<ModeratorPage />} />
                 <Route path="/admin" element={<AdminPage />} />
                 <Route path="/admin/login" element={<AdminLoginPage />} />
                 <Route path="/auth/callback" element={<SteamCallback />} />
