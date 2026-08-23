@@ -3,7 +3,8 @@ import { Link, Navigate } from "react-router-dom";
 import {
   ShieldAlert, Users, Receipt, Database, LayoutDashboard,
   Search, Ban, ShieldCheck, DollarSign, Package2, TrendingUp,
-  Download, Upload, RefreshCw,} from "lucide-react";
+  Download, Upload, RefreshCw, MessageSquare, ArrowLeft, Send, XCircle, Loader2,
+} from "lucide-react";
 import { toast } from "sonner";
 import api from "../lib/api";
 import { useAuth } from "../context/AuthContext";
@@ -13,6 +14,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "../components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs";
+import { STATUS_STYLES as TICKET_STATUS_STYLES, STATUS_LABEL as TICKET_STATUS_LABEL, CATEGORY_LABEL as TICKET_CATEGORY_LABEL } from "./SupportPage";
 
 const STATUS_COLORS = {
   pending: "text-[#E4AE39] bg-[#E4AE39]/10 border-[#E4AE39]/30",
@@ -548,6 +550,231 @@ function BackupTab() {
   );
 }
 
+// ========================= TICKETS =========================
+function TicketsTab() {
+  const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [status, setStatus] = useState("");
+  const [q, setQ] = useState("");
+  const [skip, setSkip] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [reply, setReply] = useState("");
+  const [sending, setSending] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const limit = 50;
+
+  const load = () => {
+    setLoading(true);
+    const params = { limit, skip };
+    if (status) params.status = status;
+    if (q) params.q = q;
+    api.get("/admin/tickets", { params })
+      .then(({ data }) => { setItems(data.items || []); setTotal(data.total || 0); })
+      .catch(() => toast.error("Failed to load tickets"))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, [status, skip]);
+
+  const openTicket = async (t) => {
+    setSelected(t); setDetail(null); setReply("");
+    try {
+      const { data } = await api.get(`/admin/tickets/${t.id}`);
+      setDetail(data);
+    } catch { toast.error("Failed to load ticket"); }
+  };
+
+  const sendReply = async () => {
+    const body = reply.trim();
+    if (!body || !detail) return;
+    setSending(true);
+    try {
+      await api.post(`/admin/tickets/${detail.id}/reply`, { body });
+      toast.success("Reply sent");
+      setReply("");
+      const { data } = await api.get(`/admin/tickets/${detail.id}`);
+      setDetail(data);
+      load();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed to send"); }
+    finally { setSending(false); }
+  };
+
+  const closeTicket = async () => {
+    if (!detail) return;
+    if (!window.confirm("Close this ticket? The user will be notified and can no longer reply.")) return;
+    setClosing(true);
+    try {
+      await api.post(`/admin/tickets/${detail.id}/close`);
+      toast.success("Ticket closed");
+      const { data } = await api.get(`/admin/tickets/${detail.id}`);
+      setDetail(data);
+      load();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+    finally { setClosing(false); }
+  };
+
+  if (selected && detail) {
+    const closed = detail.status === "closed";
+    return (
+      <div className="max-w-4xl">
+        <button onClick={() => { setSelected(null); setDetail(null); }}
+          className="flex items-center gap-1 text-xs uppercase tracking-widest text-[#8A8A8A] hover:text-[#E0E0E0] mb-4">
+          <ArrowLeft className="w-3 h-3" /> Back to tickets
+        </button>
+
+        <div className="bg-[#121212] border border-white/10 rounded-sm p-5 mb-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-widest text-[#555]">
+                {TICKET_CATEGORY_LABEL[detail.category] || detail.category}
+              </div>
+              <h2 className="font-display font-black text-xl tracking-tight mt-1">{detail.subject}</h2>
+              <div className="text-[10px] font-mono text-[#8A8A8A] mt-1">
+                #{detail.id.slice(0, 8)} · by{" "}
+                <span className="text-[#E0E0E0]">{detail.user_name}</span> ({detail.user_steam_id}) ·
+                opened {timeAgo(detail.created_at)}
+              </div>
+            </div>
+            <span className={`text-[9px] font-mono uppercase tracking-widest px-2 py-0.5 rounded-sm border ${TICKET_STATUS_STYLES[detail.status] || ""}`}>
+              {TICKET_STATUS_LABEL[detail.status] || detail.status}
+            </span>
+          </div>
+          {detail.order_snapshot && (
+            <div className="mt-3 bg-[#0A0A0A] border border-white/10 rounded-sm p-3 text-xs">
+              <div className="font-mono text-[10px] text-[#555] uppercase tracking-widest">Linked order</div>
+              <div className="text-[#E0E0E0]">
+                {detail.order_snapshot.listing_snapshot?.skin_name || "—"} ·
+                ${detail.order_snapshot.amount_usd?.toFixed?.(2) ?? detail.order_snapshot.amount_usd} ·
+                {detail.order_snapshot.status}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-3">
+          {(detail.messages || []).map((m) => {
+            const admin = m.author_role === "admin";
+            return (
+              <div key={m.id} className={`flex ${admin ? "justify-start" : "justify-end"}`}>
+                <div className={`max-w-[80%] rounded-sm border ${admin ? "bg-[#E4AE39]/5 border-[#E4AE39]/30" : "bg-[#121212] border-white/10"} p-3`}>
+                  <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-widest text-[#8A8A8A] mb-1">
+                    {admin ? <span className="text-[#E4AE39]">SUPPORT — {m.author_name || "Admin"}</span>
+                            : <span>{m.author_name || "User"}</span>}
+                    · {timeAgo(m.created_at)}
+                  </div>
+                  <div className="text-sm whitespace-pre-wrap text-[#E0E0E0]">{m.body}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {closed ? (
+          <div className="mt-6 text-center text-xs text-[#8A8A8A] bg-white/5 border border-white/10 rounded-sm p-4">
+            🔒 This ticket is closed. The user has been notified.
+          </div>
+        ) : (
+          <div className="mt-6 bg-[#121212] border border-white/10 rounded-sm p-4 space-y-3">
+            <textarea value={reply} onChange={(e) => setReply(e.target.value)}
+              placeholder="Reply as SUPPORT…" rows={4}
+              data-testid="admin-reply-body"
+              className="w-full bg-[#0A0A0A] border border-white/10 focus:border-[#E4AE39] rounded-sm px-3 py-2 text-sm outline-none resize-y" />
+            <div className="flex justify-between items-center gap-2">
+              <button onClick={closeTicket} disabled={closing}
+                data-testid="admin-close-ticket"
+                className="flex items-center gap-1 bg-white/5 hover:bg-[#EB4B4B]/20 hover:text-[#EB4B4B] text-[#8A8A8A] px-3 py-2 rounded-sm text-xs uppercase tracking-widest disabled:opacity-50">
+                {closing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />} Close ticket
+              </button>
+              <button onClick={sendReply} disabled={sending || !reply.trim()}
+                data-testid="admin-send-reply"
+                className="flex items-center gap-1 bg-[#E4AE39] hover:bg-[#F5C75A] text-[#0A0A0A] font-bold px-4 py-2 rounded-sm text-xs uppercase tracking-widest disabled:opacity-50">
+                {sending ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Sending…</> : <><Send className="w-3 h-3" /> Send reply</>}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2 mb-4">
+        <div className="flex items-center gap-2 bg-[#121212] border border-white/10 focus-within:border-[#E4AE39] rounded-sm px-3 py-2 flex-1 min-w-[220px]">
+          <Search className="w-4 h-4 text-[#555]" />
+          <input value={q} onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { setSkip(0); load(); } }}
+            data-testid="tickets-search"
+            placeholder="Search ticket id, subject, user…"
+            className="bg-transparent outline-none flex-1 text-sm placeholder:text-[#555]" />
+        </div>
+        <select value={status} onChange={(e) => { setSkip(0); setStatus(e.target.value); }}
+          className="bg-[#121212] border border-white/10 rounded-sm px-3 py-2 text-sm focus:outline-none focus:border-[#E4AE39]">
+          <option value="">All statuses</option>
+          <option value="open">Awaiting reply</option>
+          <option value="pending_reply">Reply received</option>
+          <option value="resolved">Resolved</option>
+          <option value="closed">Closed</option>
+        </select>
+      </div>
+
+      <div className="text-xs text-[#8A8A8A] mb-3">
+        <span className="text-[#E4AE39] font-mono">{total.toLocaleString()}</span> tickets
+      </div>
+
+      <div className="bg-[#121212] border border-white/10 rounded-sm overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="text-[10px] uppercase tracking-widest text-[#555] border-b border-white/10">
+            <tr>
+              <th className="text-left py-3 px-3">Subject</th>
+              <th className="text-left py-3 px-3">User</th>
+              <th className="text-left py-3 px-3">Category</th>
+              <th className="text-left py-3 px-3">Status</th>
+              <th className="text-right py-3 px-3">Updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={5} className="text-center py-10 text-[#8A8A8A]">Loading…</td></tr>
+            ) : items.length === 0 ? (
+              <tr><td colSpan={5} className="text-center py-10 text-[#8A8A8A]">No tickets.</td></tr>
+            ) : items.map((t) => (
+              <tr key={t.id} onClick={() => openTicket(t)}
+                className="border-b border-white/5 hover:bg-white/[0.02] cursor-pointer"
+                data-testid={`admin-ticket-${t.id}`}>
+                <td className="py-3 px-3">{t.subject}</td>
+                <td className="py-3 px-3">
+                  <div className="text-[#E0E0E0]">{t.user_name}</div>
+                  <div className="text-[10px] font-mono text-[#555]">{t.user_steam_id}</div>
+                </td>
+                <td className="py-3 px-3 text-[#8A8A8A] text-xs">
+                  {TICKET_CATEGORY_LABEL[t.category] || t.category}
+                </td>
+                <td className="py-3 px-3">
+                  <span className={`text-[9px] font-mono uppercase tracking-widest px-2 py-0.5 rounded-sm border ${TICKET_STATUS_STYLES[t.status] || ""}`}>
+                    {TICKET_STATUS_LABEL[t.status] || t.status}
+                  </span>
+                </td>
+                <td className="py-3 px-3 text-right text-[10px] text-[#555] font-mono">{timeAgo(t.updated_at)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="flex items-center justify-between mt-4">
+        <button onClick={() => setSkip(Math.max(0, skip - limit))} disabled={skip === 0}
+          className="px-3 py-1.5 bg-[#121212] border border-white/10 disabled:opacity-30 text-xs uppercase tracking-widest rounded-sm">Prev</button>
+        <div className="text-xs text-[#8A8A8A] font-mono">{Math.min(skip + 1, total)}–{Math.min(skip + limit, total)} of {total}</div>
+        <button onClick={() => setSkip(skip + limit)} disabled={skip + limit >= total}
+          className="px-3 py-1.5 bg-[#121212] border border-white/10 disabled:opacity-30 text-xs uppercase tracking-widest rounded-sm">Next</button>
+      </div>
+    </div>
+  );
+}
+
+
 // ========================= PAGE SHELL =========================
 export default function AdminPage() {
   const { user, loading } = useAuth();
@@ -577,6 +804,9 @@ export default function AdminPage() {
           <TabsTrigger value="users" data-testid="tab-users" className="data-[state=active]:bg-[#E4AE39] data-[state=active]:text-[#0A0A0A] text-xs uppercase tracking-widest px-4 py-2">
             <Users className="w-3.5 h-3.5 mr-1.5" /> Users
           </TabsTrigger>
+          <TabsTrigger value="tickets" data-testid="tab-tickets" className="data-[state=active]:bg-[#E4AE39] data-[state=active]:text-[#0A0A0A] text-xs uppercase tracking-widest px-4 py-2">
+            <MessageSquare className="w-3.5 h-3.5 mr-1.5" /> Tickets
+          </TabsTrigger>
           <TabsTrigger value="backup" data-testid="tab-backup" className="data-[state=active]:bg-[#E4AE39] data-[state=active]:text-[#0A0A0A] text-xs uppercase tracking-widest px-4 py-2">
             <Database className="w-3.5 h-3.5 mr-1.5" /> Backup
           </TabsTrigger>
@@ -584,6 +814,7 @@ export default function AdminPage() {
         <TabsContent value="dashboard"><DashboardTab /></TabsContent>
         <TabsContent value="transactions"><TransactionsTab /></TabsContent>
         <TabsContent value="users"><UsersTab /></TabsContent>
+        <TabsContent value="tickets"><TicketsTab /></TabsContent>
         <TabsContent value="backup"><BackupTab /></TabsContent>
       </Tabs>
     </div>
