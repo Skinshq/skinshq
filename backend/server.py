@@ -41,6 +41,8 @@ ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 PRICE_SYNC_ENABLED = os.environ.get("PRICE_SYNC_ENABLED", "1") == "1"
 BOOTSTRAP_ADMIN_EMAIL = os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "admin@skinmrkt.com")
 BOOTSTRAP_ADMIN_PASSWORD = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "admin1234")
+BOOTSTRAP_MOD_EMAIL = os.environ.get("BOOTSTRAP_MOD_EMAIL", "mod@skinmrkt.com")
+BOOTSTRAP_MOD_PASSWORD = os.environ.get("BOOTSTRAP_MOD_PASSWORD", "mod1234")
 
 # Stripe checkout is initialized per-request via StripeCheckout(api_key=STRIPE_KEY, webhook_url=...)
 
@@ -370,33 +372,41 @@ async def seed_catalog():
     # Bootstrap admin login credentials — creates a password-based admin
     # user on first boot if one doesn't already exist for the configured
     # BOOTSTRAP_ADMIN_EMAIL. Use env vars to override the defaults.
-    if BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD:
+    async def _seed_staff(email: str, password: str, role: str):
+        """role is 'admin' or 'moderator'. Sets the matching flag."""
         try:
-            existing = await db.users.find_one({"admin_email": BOOTSTRAP_ADMIN_EMAIL.lower()})
-            if not existing:
-                pw_hash = bcrypt.hashpw(
-                    BOOTSTRAP_ADMIN_PASSWORD.encode("utf-8"),
-                    bcrypt.gensalt(rounds=10),
-                ).decode("utf-8")
-                admin_doc = {
-                    "id": str(uuid.uuid4()),
-                    "steam_id": "admin-" + str(uuid.uuid4())[:12],
-                    "display_name": "Admin",
-                    "admin_email": BOOTSTRAP_ADMIN_EMAIL.lower(),
-                    "admin_password_hash": pw_hash,
-                    "auth_method": "admin_password",
-                    "is_admin": True,
-                    "is_verified": True,
-                    "is_banned": False,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                }
-                await db.users.insert_one(admin_doc)
-                log.info(f"Seeded bootstrap admin: {BOOTSTRAP_ADMIN_EMAIL}")
-            # Ensure the admin_email lookup is indexed + unique
-            await db.users.create_index("admin_email", unique=True,
-                                         partialFilterExpression={"admin_email": {"$exists": True}})
+            existing = await db.users.find_one({"admin_email": email.lower()})
+            if existing:
+                return
+            pw_hash = bcrypt.hashpw(password.encode("utf-8"),
+                                     bcrypt.gensalt(rounds=10)).decode("utf-8")
+            doc = {
+                "id": str(uuid.uuid4()),
+                "steam_id": f"{role}-" + str(uuid.uuid4())[:12],
+                "display_name": role.capitalize(),
+                "admin_email": email.lower(),
+                "admin_password_hash": pw_hash,
+                "auth_method": "admin_password",
+                "is_admin": role == "admin",
+                "is_moderator": role == "moderator",
+                "is_verified": True,
+                "is_banned": False,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.users.insert_one(doc)
+            log.info(f"Seeded bootstrap {role}: {email}")
         except Exception as e:
-            log.warning(f"admin bootstrap warning: {e}")
+            log.warning(f"{role} bootstrap warning: {e}")
+
+    if BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD:
+        await _seed_staff(BOOTSTRAP_ADMIN_EMAIL, BOOTSTRAP_ADMIN_PASSWORD, "admin")
+    if BOOTSTRAP_MOD_EMAIL and BOOTSTRAP_MOD_PASSWORD:
+        await _seed_staff(BOOTSTRAP_MOD_EMAIL, BOOTSTRAP_MOD_PASSWORD, "moderator")
+    try:
+        await db.users.create_index("admin_email", unique=True,
+                                     partialFilterExpression={"admin_email": {"$exists": True}})
+    except Exception as e:
+        log.warning(f"admin_email index warning: {e}")
 
     # Launch background price sync scheduler (6h refresh). Non-blocking.
     if PRICE_SYNC_ENABLED:
@@ -1865,8 +1875,8 @@ async def admin_login(payload: AdminLogin, request: Request):
         ok = False
     if not ok:
         raise HTTPException(401, "Invalid credentials")
-    if not user.get("is_admin"):
-        raise HTTPException(403, "Not an admin account")
+    if not (user.get("is_admin") or user.get("is_moderator")):
+        raise HTTPException(403, "Not a staff account")
     # Update last IP + last seen
     ip = _client_ip(request)
     upd = {"last_seen_at": datetime.now(timezone.utc).isoformat()}

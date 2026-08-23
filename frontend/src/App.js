@@ -43,6 +43,7 @@ function App() {
                 <Route path="/me" element={<MemberPanel />} />
                 <Route path="/support" element={<SupportPage />} />
                 <Route path="/mod" element={<ModeratorPage />} />
+                <Route path="/mod/login" element={<AdminLoginPage />} />
                 <Route path="/admin" element={<AdminPage />} />
                 <Route path="/admin/login" element={<AdminLoginPage />} />
                 <Route path="/auth/callback" element={<SteamCallback />} />

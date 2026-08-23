@@ -13,6 +13,7 @@ export default function AdminLoginPage() {
   const [submitting, setSubmitting] = useState(false);
 
   if (!loading && user?.is_admin) return <Navigate to="/admin" replace />;
+  if (!loading && user?.is_moderator) return <Navigate to="/mod" replace />;
 
   const onSubmit = async (e) => {
     e.preventDefault();
@@ -21,8 +22,9 @@ export default function AdminLoginPage() {
     try {
       const { data } = await api.post("/admin/login", { email: email.trim(), password });
       await login(data.token);
-      toast.success("Welcome, admin");
-      navigate("/admin");
+      const isAdmin = !!data.user?.is_admin;
+      toast.success(isAdmin ? "Welcome, admin" : "Welcome, moderator");
+      navigate(isAdmin ? "/admin" : "/mod");
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Login failed");
     } finally {
@@ -41,10 +43,10 @@ export default function AdminLoginPage() {
             Restricted Area
           </div>
           <h1 className="font-display font-black text-3xl tracking-tight">
-            Admin sign in
+            Staff sign in
           </h1>
           <p className="text-xs text-[#8A8A8A] mt-2">
-            Enter your admin credentials to access the control panel.
+            Enter your admin or moderator credentials. You'll be routed to the right panel automatically.
           </p>
         </div>
 
