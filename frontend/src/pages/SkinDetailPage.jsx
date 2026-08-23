@@ -7,6 +7,7 @@ import { useAuth } from "../context/AuthContext";
 import { useCurrency } from "../context/CurrencyContext";
 import { timeAgo } from "../lib/utils";
 import FloatBar, { tierForFloat } from "../components/FloatBar";
+import HeartButton from "../components/HeartButton";
 
 const rarityLabel = {
   consumer: "Consumer Grade", industrial: "Industrial Grade", milspec: "Mil-Spec Grade",
@@ -111,9 +112,24 @@ export default function SkinDetailPage() {
           <div className={`text-[11px] uppercase tracking-[0.3em] font-mono mb-2 rarity-text-${rarity}`}>
             {skin.weapon} — {rarityLabel[rarity]}
           </div>
-          <h1 className="font-display font-black text-3xl lg:text-4xl tracking-tight mb-4">
-            {skin.name}
-          </h1>
+          <div className="flex items-start justify-between gap-4 mb-4">
+            <h1 className="font-display font-black text-3xl lg:text-4xl tracking-tight">
+              {skin.name}
+            </h1>
+            <HeartButton
+              targetType="skin"
+              targetId={skin.master_id}
+              size="md"
+              snapshot={{
+                skin_name: skin.name,
+                image: skin.image,
+                rarity: skin.rarity,
+                weapon: skin.weapon,
+                type: skin.type,
+                price_usd: skin.market_price_usd ?? skin.reference_price_usd,
+              }}
+            />
+          </div>
 
           <div className="bg-[#121212] border border-white/10 rounded-sm p-5 mb-4">
             {skin.market_price_usd != null ? (
@@ -256,11 +272,25 @@ export default function SkinDetailPage() {
                       {format(l.price_usd)}
                     </td>
                     <td className="py-3 px-2 text-right">
-                      <button onClick={() => buy(l)} disabled={buying === l.id}
-                        data-testid={`buy-${l.id}`}
-                        className="text-[10px] uppercase tracking-widest bg-[#E4AE39] hover:bg-[#F5C75A] text-[#0A0A0A] font-bold px-3 py-2 rounded-sm disabled:opacity-50">
-                        {buying === l.id ? "…" : "Buy"}
-                      </button>
+                      <div className="flex items-center gap-2 justify-end">
+                        <HeartButton
+                          targetType="listing"
+                          targetId={l.id}
+                          snapshot={{
+                            skin_name: l.skin_name || skin.name,
+                            wear: l.wear,
+                            image: l.image || skin.image,
+                            rarity: skin.rarity,
+                            price_usd: l.price_usd,
+                            master_id: skin.master_id,
+                          }}
+                        />
+                        <button onClick={() => buy(l)} disabled={buying === l.id}
+                          data-testid={`buy-${l.id}`}
+                          className="text-[10px] uppercase tracking-widest bg-[#E4AE39] hover:bg-[#F5C75A] text-[#0A0A0A] font-bold px-3 py-2 rounded-sm disabled:opacity-50">
+                          {buying === l.id ? "…" : "Buy"}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

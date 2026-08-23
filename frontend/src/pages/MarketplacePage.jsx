@@ -7,6 +7,7 @@ import { useCurrency } from "../context/CurrencyContext";
 import { timeAgo } from "../lib/utils";
 import FloatBar from "../components/FloatBar";
 import CategorySidebar from "../components/CategorySidebar";
+import HeartButton from "../components/HeartButton";
 
 const RARITIES = [
   { key: "consumer", label: "Consumer" },
@@ -142,6 +143,20 @@ export default function MarketplacePage() {
                       {s.live_listings} live
                     </div>
                   )}
+                  <div className={`absolute ${s.live_listings > 0 ? "top-9" : "top-2"} right-2`}>
+                    <HeartButton
+                      targetType="skin"
+                      targetId={s.master_id}
+                      snapshot={{
+                        skin_name: s.name,
+                        image: s.image,
+                        rarity: s.rarity,
+                        weapon: s.weapon,
+                        type: s.type,
+                        price_usd: s.market_price_usd ?? s.reference_price_usd,
+                      }}
+                    />
+                  </div>
                 </div>
                 <div className="p-3 flex flex-col gap-1 flex-1">
                   <div className="text-[10px] uppercase tracking-[0.15em] text-[#555] font-mono">{s.weapon}</div>

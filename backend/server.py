@@ -103,6 +103,100 @@ class ListingCreate(BaseModel):
     asset_id: Optional[str] = None
 
 
+class FavoriteCreate(BaseModel):
+    target_type: str   # "listing" | "skin"
+    target_id: str     # listing.id or master_id
+    # Optional client-provided snapshot (used to render Favorites page even if
+    # the underlying doc is later deleted). Server-verified for listing type.
+    snapshot: Optional[dict] = None
+
+
+# Helpers for favorites/notifications
+async def _create_notification(user_id: str, ntype: str, title: str, body: str,
+                                target_type: str, target_id: str,
+                                snapshot: Optional[dict] = None):
+    """Insert an unread notification. Silently swallows dupes on unique index."""
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "type": ntype,
+        "title": title,
+        "body": body,
+        "target_type": target_type,
+        "target_id": target_id,
+        "snapshot": snapshot or {},
+        "read": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await db.notifications.insert_one(doc)
+    except Exception as e:
+        log.warning(f"notification insert warning: {e}")
+
+
+async def _notify_listing_sold(listing: dict, buyer_id: Optional[str] = None):
+    """Fan-out: notify every user who favorited this listing that it's gone."""
+    listing_id = listing.get("id")
+    if not listing_id:
+        return
+    favs = await db.favorites.find(
+        {"target_type": "listing", "target_id": listing_id},
+        {"_id": 0},
+    ).to_list(1000)
+    for f in favs:
+        if buyer_id and f["user_id"] == buyer_id:
+            continue  # skip the buyer themselves
+        await _create_notification(
+            user_id=f["user_id"],
+            ntype="listing_sold",
+            title="A favourite was sold",
+            body=f"{listing.get('skin_name', 'The item')} you saved was just bought by another user — it's no longer available.",
+            target_type="listing",
+            target_id=listing_id,
+            snapshot={
+                "skin_name": listing.get("skin_name"),
+                "wear": listing.get("wear"),
+                "image": listing.get("image"),
+                "rarity": listing.get("rarity"),
+                "price_usd": listing.get("price_usd"),
+            },
+        )
+
+
+async def _notify_new_listing_for_skin(listing: dict):
+    """Fan-out: notify users who favorited this base skin that a new listing dropped."""
+    skin_name = listing.get("skin_name")
+    if not skin_name:
+        return
+    master = await db.skins_master.find_one({"name": skin_name}, {"_id": 0, "master_id": 1})
+    if not master:
+        return
+    master_id = master.get("master_id")
+    favs = await db.favorites.find(
+        {"target_type": "skin", "target_id": master_id},
+        {"_id": 0},
+    ).to_list(1000)
+    for f in favs:
+        if f["user_id"] == listing.get("seller_id"):
+            continue  # skip the seller themselves
+        await _create_notification(
+            user_id=f["user_id"],
+            ntype="new_listing",
+            title="New listing for a favourite skin",
+            body=f"{skin_name} ({listing.get('wear','—')}) just listed at ${listing.get('price_usd', 0):.2f}",
+            target_type="skin",
+            target_id=master_id,
+            snapshot={
+                "skin_name": skin_name,
+                "wear": listing.get("wear"),
+                "image": listing.get("image"),
+                "rarity": listing.get("rarity"),
+                "price_usd": listing.get("price_usd"),
+                "listing_id": listing.get("id"),
+            },
+        )
+
+
 # ---------------- Startup: seed catalog ----------------
 
 @app.on_event("startup")
@@ -148,6 +242,22 @@ async def seed_catalog():
         await db.market_prices.create_index("market_hash_name", unique=True)
     except Exception as e:
         log.warning(f"market_prices index warning: {e}")
+
+    # Favorites: fast lookup by user + unique per (user, target)
+    try:
+        await db.favorites.create_index(
+            [("user_id", 1), ("target_type", 1), ("target_id", 1)],
+            unique=True,
+        )
+    except Exception as e:
+        log.warning(f"favorites index warning: {e}")
+
+    # Notifications: fast per-user listing + unread count
+    try:
+        await db.notifications.create_index([("user_id", 1), ("created_at", -1)])
+        await db.notifications.create_index([("user_id", 1), ("read", 1)])
+    except Exception as e:
+        log.warning(f"notifications index warning: {e}")
 
     # Launch background price sync scheduler (6h refresh). Non-blocking.
     if PRICE_SYNC_ENABLED:
@@ -618,6 +728,11 @@ async def create_listing(payload: ListingCreate, user=Depends(require_verified))
     }
     await db.listings.insert_one(listing.copy())
     listing.pop("_id", None)
+    # Fan-out: notify anyone who favorited this base skin
+    try:
+        await _notify_new_listing_for_skin(listing)
+    except Exception as e:
+        log.warning(f"new-listing notify failed: {e}")
     return listing
 
 
@@ -739,6 +854,12 @@ async def order_status(order_id: str, request: Request, user=Depends(get_current
                         {"session_id": order["stripe_session_id"]},
                         {"$set": {"payment_status": "paid", "status": "completed"}}
                     )
+                    # Fan-out: notify anyone who favorited this listing
+                    try:
+                        await _notify_listing_sold(order.get("listing_snapshot") or {},
+                                                    buyer_id=order.get("buyer_id"))
+                    except Exception as e:
+                        log.warning(f"sold-notify (sync) failed: {e}")
                 order["status"] = "paid"
                 order["trade_status"] = "trade_sent"
         except Exception as e:
@@ -777,6 +898,13 @@ async def stripe_webhook(request: Request):
                     {"session_id": event.session_id},
                     {"$set": {"payment_status": "paid", "status": "completed"}}
                 )
+                # Fan-out: notify anyone who favorited this listing
+                try:
+                    if order:
+                        await _notify_listing_sold(order.get("listing_snapshot") or {},
+                                                    buyer_id=order.get("buyer_id"))
+                except Exception as e:
+                    log.warning(f"sold-notify (webhook) failed: {e}")
     return {"ok": True}
 
 
@@ -803,6 +931,132 @@ async def my_orders(user=Depends(get_current_user)):
     buys = await db.orders.find({"buyer_id": user["id"]}, {"_id": 0}).sort([("created_at", -1)]).to_list(200)
     sells = await db.orders.find({"seller_id": user["id"]}, {"_id": 0}).sort([("created_at", -1)]).to_list(200)
     return {"buys": buys, "sells": sells}
+
+
+# ---------------- Favorites (liked items) ----------------
+
+@api.post("/favorites")
+async def add_favorite(payload: FavoriteCreate, user=Depends(get_current_user)):
+    if payload.target_type not in ("listing", "skin"):
+        raise HTTPException(400, "target_type must be 'listing' or 'skin'")
+    # Enrich snapshot server-side so it's authoritative
+    snap = dict(payload.snapshot or {})
+    if payload.target_type == "listing":
+        l = await db.listings.find_one({"id": payload.target_id}, {"_id": 0})
+        if not l:
+            raise HTTPException(404, "Listing not found")
+        snap.setdefault("skin_name", l.get("skin_name"))
+        snap.setdefault("wear", l.get("wear"))
+        snap.setdefault("image", l.get("image"))
+        snap.setdefault("rarity", l.get("rarity"))
+        snap.setdefault("price_usd", l.get("price_usd"))
+    else:  # skin
+        m = await db.skins_master.find_one({"master_id": payload.target_id}, {"_id": 0})
+        if not m:
+            raise HTTPException(404, "Skin not found")
+        snap.setdefault("skin_name", m.get("name"))
+        snap.setdefault("image", m.get("image"))
+        snap.setdefault("rarity", m.get("rarity"))
+        snap.setdefault("weapon", m.get("weapon"))
+        snap.setdefault("type", m.get("type"))
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "target_type": payload.target_type,
+        "target_id": payload.target_id,
+        "snapshot": snap,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await db.favorites.insert_one(doc)
+    except Exception:
+        # Likely duplicate on unique index — return existing
+        existing = await db.favorites.find_one(
+            {"user_id": user["id"], "target_type": payload.target_type,
+             "target_id": payload.target_id}, {"_id": 0},
+        )
+        return existing or {"ok": True, "duplicate": True}
+    doc.pop("_id", None)
+    return doc
+
+
+@api.delete("/favorites")
+async def remove_favorite(target_type: str, target_id: str,
+                           user=Depends(get_current_user)):
+    """Unfavorite by (target_type, target_id) — the natural key from the UI."""
+    res = await db.favorites.delete_one({
+        "user_id": user["id"],
+        "target_type": target_type,
+        "target_id": target_id,
+    })
+    return {"ok": True, "removed": res.deleted_count}
+
+
+@api.get("/favorites")
+async def list_favorites(user=Depends(get_current_user)):
+    items = await db.favorites.find({"user_id": user["id"]}, {"_id": 0}) \
+        .sort([("created_at", -1)]).to_list(500)
+    # Enrich with current listing status if applicable
+    for f in items:
+        if f["target_type"] == "listing":
+            l = await db.listings.find_one({"id": f["target_id"]},
+                                            {"_id": 0, "status": 1, "price_usd": 1})
+            f["listing_status"] = l.get("status") if l else "unavailable"
+            f["current_price_usd"] = l.get("price_usd") if l else None
+    return {"items": items, "count": len(items)}
+
+
+@api.get("/favorites/check")
+async def check_favorites(user_optional=Depends(get_current_user_optional)):
+    """Return a set of target_ids the current user has favorited (for UI heart-state)."""
+    if not user_optional:
+        return {"listings": [], "skins": []}
+    docs = await db.favorites.find(
+        {"user_id": user_optional["id"]},
+        {"_id": 0, "target_type": 1, "target_id": 1},
+    ).to_list(1000)
+    return {
+        "listings": [d["target_id"] for d in docs if d["target_type"] == "listing"],
+        "skins":    [d["target_id"] for d in docs if d["target_type"] == "skin"],
+    }
+
+
+# ---------------- Notifications ----------------
+
+@api.get("/notifications")
+async def list_notifications(limit: int = 50, user=Depends(get_current_user)):
+    items = await db.notifications.find({"user_id": user["id"]}, {"_id": 0}) \
+        .sort([("created_at", -1)]).limit(limit).to_list(limit)
+    return {"items": items, "count": len(items)}
+
+
+@api.get("/notifications/unread-count")
+async def unread_count(user_optional=Depends(get_current_user_optional)):
+    if not user_optional:
+        return {"count": 0}
+    n = await db.notifications.count_documents(
+        {"user_id": user_optional["id"], "read": False}
+    )
+    return {"count": n}
+
+
+@api.post("/notifications/{notif_id}/read")
+async def mark_read(notif_id: str, user=Depends(get_current_user)):
+    await db.notifications.update_one(
+        {"id": notif_id, "user_id": user["id"]},
+        {"$set": {"read": True}}
+    )
+    return {"ok": True}
+
+
+@api.post("/notifications/read-all")
+async def mark_all_read(user=Depends(get_current_user)):
+    res = await db.notifications.update_many(
+        {"user_id": user["id"], "read": False},
+        {"$set": {"read": True}}
+    )
+    return {"ok": True, "updated": res.modified_count}
 
 
 # ---------------- Currency FX ----------------

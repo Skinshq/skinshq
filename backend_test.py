@@ -1,348 +1,707 @@
 #!/usr/bin/env python3
-"""Backend API tests for Steam Market price sync endpoints."""
+"""
+Comprehensive backend test for CS2 Marketplace Favourites + Notifications feature.
+Tests all endpoints with proper auth, validation, and notification triggers.
+"""
+
 import requests
+import json
 import sys
-import os
-from pathlib import Path
+from typing import Optional, Dict, List
 
-# Load environment variables
-backend_env = Path("/app/backend/.env")
-frontend_env = Path("/app/frontend/.env")
+# Backend URL from frontend/.env
+BASE_URL = "https://live-market-feed-4.preview.emergentagent.com/api"
 
-BACKEND_URL = None
-ADMIN_TOKEN = None
+# Test data
+USER_A_STEAMID = "76561198084749846"
+USER_B_STEAMID = "76561198000000000"
 
-# Read REACT_APP_BACKEND_URL from frontend/.env
-if frontend_env.exists():
-    with open(frontend_env) as f:
-        for line in f:
-            if line.startswith("REACT_APP_BACKEND_URL="):
-                BACKEND_URL = line.split("=", 1)[1].strip() + "/api"
-                break
+# Global state
+user_a_token: Optional[str] = None
+user_a_id: Optional[str] = None
+user_b_token: Optional[str] = None
+user_b_id: Optional[str] = None
+test_skin_master_id: Optional[str] = None
+test_listing_id: Optional[str] = None
+test_favorite_ids: List[str] = []
+test_notification_ids: List[str] = []
 
-# Read ADMIN_TOKEN from backend/.env
-if backend_env.exists():
-    with open(backend_env) as f:
-        for line in f:
-            if line.startswith("ADMIN_TOKEN="):
-                ADMIN_TOKEN = line.split("=", 1)[1].strip().strip('"')
-                break
+class TestResult:
+    def __init__(self):
+        self.passed = 0
+        self.failed = 0
+        self.errors = []
+    
+    def success(self, msg: str):
+        self.passed += 1
+        print(f"✅ {msg}")
+    
+    def fail(self, msg: str, details: str = ""):
+        self.failed += 1
+        error = f"❌ {msg}"
+        if details:
+            error += f"\n   Details: {details}"
+        self.errors.append(error)
+        print(error)
+    
+    def summary(self):
+        print("\n" + "="*80)
+        print(f"TEST SUMMARY: {self.passed} passed, {self.failed} failed")
+        print("="*80)
+        if self.errors:
+            print("\nFailed tests:")
+            for err in self.errors:
+                print(err)
+        return self.failed == 0
 
-if not BACKEND_URL:
-    print("❌ REACT_APP_BACKEND_URL not found in /app/frontend/.env")
-    sys.exit(1)
+result = TestResult()
 
-if not ADMIN_TOKEN:
-    print("❌ ADMIN_TOKEN not found in /app/backend/.env")
-    sys.exit(1)
-
-print(f"🔧 Backend URL: {BACKEND_URL}")
-print(f"🔧 Admin Token: {ADMIN_TOKEN[:20]}...")
-print()
-
-# Test results tracking
-passed = 0
-failed = 0
-test_results = []
-
-
-def test(name, fn):
-    """Run a test function and track results."""
-    global passed, failed
-    print(f"🧪 {name}")
+def test_auth_setup():
+    """Setup: Create two test users and get JWT tokens"""
+    global user_a_token, user_a_id, user_b_token, user_b_id
+    
+    print("\n=== AUTH SETUP ===")
+    
+    # User A
     try:
-        fn()
-        passed += 1
-        test_results.append(f"✅ {name}")
-        print(f"   ✅ PASS\n")
-    except AssertionError as e:
-        failed += 1
-        test_results.append(f"❌ {name}: {e}")
-        print(f"   ❌ FAIL: {e}\n")
-    except Exception as e:
-        failed += 1
-        test_results.append(f"❌ {name}: {type(e).__name__}: {e}")
-        print(f"   ❌ ERROR: {type(e).__name__}: {e}\n")
-
-
-# ============================================================================
-# Test 1: GET /api/skins/price-sync-status
-# ============================================================================
-
-def test_price_sync_status():
-    """Test GET /api/skins/price-sync-status returns correct JSON shape."""
-    url = f"{BACKEND_URL}/skins/price-sync-status"
-    resp = requests.get(url, timeout=15)
-    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-    
-    data = resp.json()
-    required_keys = ["running", "last_started_at", "last_finished_at", "last_error", "last_count", "total_items"]
-    for key in required_keys:
-        assert key in data, f"Missing key: {key}"
-    
-    assert isinstance(data["running"], bool), f"running should be bool, got {type(data['running'])}"
-    print(f"   📊 Sync state: running={data['running']}, last_count={data['last_count']}, total_items={data['total_items']}")
-
-
-# ============================================================================
-# Test 2: POST /api/skins/refresh-prices - Auth scenarios
-# ============================================================================
-
-def test_refresh_prices_no_token():
-    """Test POST /api/skins/refresh-prices without auth header returns 403."""
-    url = f"{BACKEND_URL}/skins/refresh-prices"
-    resp = requests.post(url, timeout=15)
-    assert resp.status_code == 403, f"Expected 403, got {resp.status_code}"
-    data = resp.json()
-    assert "detail" in data, "Expected 'detail' key in error response"
-    assert "Admin token required" in data["detail"], f"Unexpected error message: {data['detail']}"
-    print(f"   🔒 Correctly rejected: {data['detail']}")
-
-
-def test_refresh_prices_wrong_token():
-    """Test POST /api/skins/refresh-prices with wrong token returns 403."""
-    url = f"{BACKEND_URL}/skins/refresh-prices"
-    headers = {"X-Admin-Token": "wrong_token_12345"}
-    resp = requests.post(url, headers=headers, timeout=15)
-    assert resp.status_code == 403, f"Expected 403, got {resp.status_code}"
-    print(f"   🔒 Correctly rejected wrong token")
-
-
-def test_refresh_prices_correct_token():
-    """Test POST /api/skins/refresh-prices with correct token returns 200."""
-    url = f"{BACKEND_URL}/skins/refresh-prices"
-    headers = {"X-Admin-Token": ADMIN_TOKEN}
-    resp = requests.post(url, headers=headers, timeout=15)
-    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-    
-    data = resp.json()
-    assert "ok" in data, "Missing 'ok' key"
-    assert data["ok"] is True, f"Expected ok=true, got {data['ok']}"
-    assert "started" in data or "already_running" in data, "Missing 'started' or 'already_running' key"
-    assert "full" in data, "Missing 'full' key"
-    assert data["full"] is False, f"Expected full=false, got {data['full']}"
-    assert "state" in data, "Missing 'state' key"
-    
-    print(f"   ✅ Response: ok={data['ok']}, started={data.get('started')}, already_running={data.get('already_running')}, full={data['full']}")
-
-
-def test_refresh_prices_full_param():
-    """Test POST /api/skins/refresh-prices?full=true with correct token."""
-    url = f"{BACKEND_URL}/skins/refresh-prices?full=true"
-    headers = {"X-Admin-Token": ADMIN_TOKEN}
-    resp = requests.post(url, headers=headers, timeout=15)
-    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-    
-    data = resp.json()
-    assert "ok" in data, "Missing 'ok' key"
-    assert data["ok"] is True, f"Expected ok=true, got {data['ok']}"
-    # If already running from previous test, that's OK
-    if "full" in data:
-        assert data["full"] is True, f"Expected full=true, got {data['full']}"
-    
-    print(f"   ✅ Full sync response: ok={data['ok']}, full={data.get('full')}")
-
-
-# ============================================================================
-# Test 3: GET /api/skins/all - Market price fields
-# ============================================================================
-
-def test_skins_all_market_fields():
-    """Test GET /api/skins/all returns items with market price fields."""
-    url = f"{BACKEND_URL}/skins/all?page=1&page_size=10"
-    resp = requests.get(url, timeout=15)
-    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-    
-    data = resp.json()
-    assert "items" in data, "Missing 'items' key"
-    assert len(data["items"]) > 0, "No items returned"
-    
-    # Check first item has all required keys
-    item = data["items"][0]
-    required_keys = [
-        "master_id", "name", "weapon", "rarity", "image",
-        "reference_price_usd", "price_range_usd", "live_listings",
-        "market_price_usd", "market_price_updated_at"
-    ]
-    for key in required_keys:
-        assert key in item, f"Missing key '{key}' in item"
-    
-    # market_price_usd can be null, but key must be present
-    print(f"   📦 First item: {item['name']}")
-    print(f"      market_price_usd={item['market_price_usd']}, reference_price_usd={item['reference_price_usd']}")
-    
-    # Check if any items have real market prices
-    items_with_prices = [i for i in data["items"] if i.get("market_price_usd") is not None]
-    print(f"   📊 Items with market prices: {len(items_with_prices)}/{len(data['items'])}")
-
-
-def test_skins_all_find_real_price():
-    """Test that at least one item across multiple pages has a real market price."""
-    found_price = False
-    for page in range(1, 6):  # Check first 5 pages
-        url = f"{BACKEND_URL}/skins/all?page={page}&page_size=20"
-        resp = requests.get(url, timeout=15)
-        if resp.status_code != 200:
-            continue
-        
-        data = resp.json()
-        for item in data.get("items", []):
-            if item.get("market_price_usd") is not None and item["market_price_usd"] > 0:
-                found_price = True
-                print(f"   💰 Found item with market price: {item['name']} = ${item['market_price_usd']}")
-                print(f"      Updated: {item.get('market_price_updated_at')}")
-                break
-        if found_price:
-            break
-    
-    # If no prices found, try covert rarity filter
-    if not found_price:
-        url = f"{BACKEND_URL}/skins/all?rarity=covert&page=1&page_size=20"
-        resp = requests.get(url, timeout=15)
+        resp = requests.post(f"{BASE_URL}/auth/steamid", 
+                            json={"steam_id": USER_A_STEAMID},
+                            timeout=10)
         if resp.status_code == 200:
             data = resp.json()
-            for item in data.get("items", []):
-                if item.get("market_price_usd") is not None and item["market_price_usd"] > 0:
-                    found_price = True
-                    print(f"   💰 Found covert item with market price: {item['name']} = ${item['market_price_usd']}")
-                    break
+            user_a_token = data["token"]
+            user_a_id = data["user"]["id"]
+            result.success(f"User A authenticated (ID: {user_a_id})")
+        else:
+            result.fail(f"User A auth failed: HTTP {resp.status_code}", resp.text)
+            return False
+    except Exception as e:
+        result.fail(f"User A auth exception: {e}")
+        return False
     
-    assert found_price, "No items with real market prices found across 5 pages or covert filter"
+    # User B
+    try:
+        resp = requests.post(f"{BASE_URL}/auth/steamid",
+                            json={"steam_id": USER_B_STEAMID},
+                            timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            user_b_token = data["token"]
+            user_b_id = data["user"]["id"]
+            result.success(f"User B authenticated (ID: {user_b_id})")
+        else:
+            result.fail(f"User B auth failed: HTTP {resp.status_code}", resp.text)
+            return False
+    except Exception as e:
+        result.fail(f"User B auth exception: {e}")
+        return False
+    
+    return True
 
+def test_get_test_skin():
+    """Get a test skin master_id for testing"""
+    global test_skin_master_id
+    
+    print("\n=== GET TEST SKIN ===")
+    
+    try:
+        resp = requests.get(f"{BASE_URL}/skins/all?page_size=5", timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            items = data.get("items", [])
+            if items:
+                test_skin_master_id = items[0]["master_id"]
+                result.success(f"Got test skin: {test_skin_master_id} ({items[0].get('name', 'Unknown')})")
+                return True
+            else:
+                result.fail("No skins found in catalog")
+                return False
+        else:
+            result.fail(f"Failed to get skins: HTTP {resp.status_code}", resp.text)
+            return False
+    except Exception as e:
+        result.fail(f"Get skins exception: {e}")
+        return False
 
-# ============================================================================
-# Test 4: GET /api/skins/detail/skin-0ffd6029f447 - AK-47 | Aquamarine Revenge
-# ============================================================================
+def test_favorites_post_validation():
+    """Test POST /api/favorites validation scenarios"""
+    print("\n=== TEST POST /api/favorites VALIDATION ===")
+    
+    # 1. Without Authorization → 401
+    try:
+        resp = requests.post(f"{BASE_URL}/favorites",
+                            json={"target_type": "skin", "target_id": test_skin_master_id},
+                            timeout=10)
+        if resp.status_code == 401:
+            result.success("POST /favorites without auth → 401")
+        else:
+            result.fail(f"POST /favorites without auth should be 401, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"POST /favorites no auth exception: {e}")
+    
+    # 2. Bad target_type → 400
+    try:
+        headers = {"Authorization": f"Bearer {user_a_token}"}
+        resp = requests.post(f"{BASE_URL}/favorites",
+                            json={"target_type": "xyz", "target_id": "test"},
+                            headers=headers,
+                            timeout=10)
+        if resp.status_code == 400:
+            data = resp.json()
+            if "target_type must be" in data.get("detail", "").lower():
+                result.success("POST /favorites with bad target_type → 400 with correct message")
+            else:
+                result.fail("POST /favorites bad target_type → 400 but wrong message", json.dumps(data))
+        else:
+            result.fail(f"POST /favorites bad target_type should be 400, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"POST /favorites bad target_type exception: {e}")
+    
+    # 3. Non-existent skin → 404
+    try:
+        headers = {"Authorization": f"Bearer {user_a_token}"}
+        resp = requests.post(f"{BASE_URL}/favorites",
+                            json={"target_type": "skin", "target_id": "nope-12345"},
+                            headers=headers,
+                            timeout=10)
+        if resp.status_code == 404:
+            data = resp.json()
+            if "skin not found" in data.get("detail", "").lower():
+                result.success("POST /favorites with non-existent skin → 404")
+            else:
+                result.fail("POST /favorites non-existent skin → 404 but wrong message", json.dumps(data))
+        else:
+            result.fail(f"POST /favorites non-existent skin should be 404, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"POST /favorites non-existent skin exception: {e}")
+    
+    # 4. Non-existent listing → 404
+    try:
+        headers = {"Authorization": f"Bearer {user_a_token}"}
+        resp = requests.post(f"{BASE_URL}/favorites",
+                            json={"target_type": "listing", "target_id": "fake-listing-id"},
+                            headers=headers,
+                            timeout=10)
+        if resp.status_code == 404:
+            data = resp.json()
+            if "listing not found" in data.get("detail", "").lower():
+                result.success("POST /favorites with non-existent listing → 404")
+            else:
+                result.fail("POST /favorites non-existent listing → 404 but wrong message", json.dumps(data))
+        else:
+            result.fail(f"POST /favorites non-existent listing should be 404, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"POST /favorites non-existent listing exception: {e}")
 
-def test_skin_detail_aquamarine():
-    """Test GET /api/skins/detail/skin-0ffd6029f447 returns market data."""
-    url = f"{BACKEND_URL}/skins/detail/skin-0ffd6029f447"
-    resp = requests.get(url, timeout=15)
-    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+def test_favorites_post_happy_path():
+    """Test POST /api/favorites happy path"""
+    global test_favorite_ids
     
-    data = resp.json()
-    assert "skin" in data, "Missing 'skin' key"
-    assert "listings" in data, "Missing 'listings' key"
+    print("\n=== TEST POST /api/favorites HAPPY PATH ===")
     
-    skin = data["skin"]
-    assert skin["name"] == "AK-47 | Aquamarine Revenge", f"Unexpected skin name: {skin['name']}"
+    # Create favorite for skin
+    try:
+        headers = {"Authorization": f"Bearer {user_a_token}"}
+        resp = requests.post(f"{BASE_URL}/favorites",
+                            json={"target_type": "skin", "target_id": test_skin_master_id},
+                            headers=headers,
+                            timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            required_fields = ["id", "user_id", "target_type", "target_id", "snapshot", "created_at"]
+            missing = [f for f in required_fields if f not in data]
+            if missing:
+                result.fail(f"POST /favorites success but missing fields: {missing}", json.dumps(data))
+            else:
+                # Check snapshot enrichment
+                snapshot = data.get("snapshot", {})
+                if "skin_name" in snapshot and "image" in snapshot and "rarity" in snapshot:
+                    result.success(f"POST /favorites skin → 200 with enriched snapshot")
+                    test_favorite_ids.append(data["id"])
+                else:
+                    result.fail("POST /favorites snapshot not properly enriched", json.dumps(snapshot))
+        else:
+            result.fail(f"POST /favorites should be 200, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"POST /favorites happy path exception: {e}")
     
-    # Check market price fields
-    required_fields = [
-        "market_price_usd", "market_price_min", "market_price_max",
-        "market_price_median", "volume_7d", "market_price_updated_at",
-        "market_variants"
-    ]
-    for field in required_fields:
-        assert field in skin, f"Missing field '{field}' in skin"
-    
-    # Check reference price fields still present
-    assert "reference_price_usd" in skin, "Missing reference_price_usd"
-    assert "price_range_usd" in skin, "Missing price_range_usd"
-    
-    # If market data is present, validate it
-    if skin["market_price_usd"] is not None:
-        assert isinstance(skin["market_price_usd"], (int, float)), "market_price_usd should be a number"
-        assert skin["market_price_usd"] > 0, "market_price_usd should be > 0"
-        print(f"   💰 Market price: ${skin['market_price_usd']}")
-        print(f"      Range: ${skin['market_price_min']} - ${skin['market_price_max']}")
-        print(f"      Median: ${skin['market_price_median']}")
-        print(f"      Volume (7d): {skin['volume_7d']}")
-        print(f"      Updated: {skin['market_price_updated_at']}")
-        
-        # Check market_variants
-        assert isinstance(skin["market_variants"], list), "market_variants should be a list"
-        if len(skin["market_variants"]) > 0:
-            variant = skin["market_variants"][0]
-            assert "market_hash_name" in variant, "Missing market_hash_name in variant"
-            assert "price_usd" in variant, "Missing price_usd in variant"
-            assert "listings" in variant, "Missing listings in variant"
-            assert "updated_at" in variant, "Missing updated_at in variant"
-            print(f"      Variants: {len(skin['market_variants'])} wear conditions")
-    else:
-        print(f"   ⚠️  No market data yet for this skin (market_price_usd=null)")
+    # Test duplicate (idempotent)
+    try:
+        headers = {"Authorization": f"Bearer {user_a_token}"}
+        resp = requests.post(f"{BASE_URL}/favorites",
+                            json={"target_type": "skin", "target_id": test_skin_master_id},
+                            headers=headers,
+                            timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            # Should return existing or indicate duplicate
+            if data.get("duplicate") or data.get("id"):
+                result.success("POST /favorites duplicate → 200 (idempotent)")
+            else:
+                result.fail("POST /favorites duplicate response unclear", json.dumps(data))
+        else:
+            result.fail(f"POST /favorites duplicate should be 200, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"POST /favorites duplicate exception: {e}")
 
-
-# ============================================================================
-# Test 5: Skin with no market data
-# ============================================================================
-
-def test_skin_no_market_data():
-    """Test that a skin with no market data returns 200 with null market_price_usd."""
-    # First, find a skin with no market data
-    url = f"{BACKEND_URL}/skins/all?page=1&page_size=20"
-    resp = requests.get(url, timeout=15)
-    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+def test_favorites_get():
+    """Test GET /api/favorites"""
+    print("\n=== TEST GET /api/favorites ===")
     
-    data = resp.json()
-    skin_without_price = None
-    for item in data.get("items", []):
-        if item.get("market_price_usd") is None:
-            skin_without_price = item
-            break
+    # Without auth → 401
+    try:
+        resp = requests.get(f"{BASE_URL}/favorites", timeout=10)
+        if resp.status_code == 401:
+            result.success("GET /favorites without auth → 401")
+        else:
+            result.fail(f"GET /favorites without auth should be 401, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"GET /favorites no auth exception: {e}")
     
-    if not skin_without_price:
-        print(f"   ⚠️  All items on page 1 have market prices - skipping this test")
+    # With auth → 200
+    try:
+        headers = {"Authorization": f"Bearer {user_a_token}"}
+        resp = requests.get(f"{BASE_URL}/favorites", headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "items" in data and "count" in data:
+                items = data["items"]
+                if len(items) > 0:
+                    # Check if listing-type favs have listing_status
+                    listing_favs = [f for f in items if f.get("target_type") == "listing"]
+                    if listing_favs:
+                        if all("listing_status" in f for f in listing_favs):
+                            result.success(f"GET /favorites → 200 with {len(items)} items, listing_status present")
+                        else:
+                            result.fail("GET /favorites listing-type favs missing listing_status", json.dumps(listing_favs[0]))
+                    else:
+                        result.success(f"GET /favorites → 200 with {len(items)} items")
+                else:
+                    result.success("GET /favorites → 200 with 0 items (expected after first favorite)")
+            else:
+                result.fail("GET /favorites missing items or count", json.dumps(data))
+        else:
+            result.fail(f"GET /favorites should be 200, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"GET /favorites exception: {e}")
+
+def test_favorites_check():
+    """Test GET /api/favorites/check"""
+    print("\n=== TEST GET /api/favorites/check ===")
+    
+    # Without auth → 200 with empty arrays (public)
+    try:
+        resp = requests.get(f"{BASE_URL}/favorites/check", timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "listings" in data and "skins" in data:
+                if data["listings"] == [] and data["skins"] == []:
+                    result.success("GET /favorites/check without auth → 200 with empty arrays")
+                else:
+                    result.fail("GET /favorites/check without auth should return empty arrays", json.dumps(data))
+            else:
+                result.fail("GET /favorites/check missing listings or skins", json.dumps(data))
+        else:
+            result.fail(f"GET /favorites/check without auth should be 200, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"GET /favorites/check no auth exception: {e}")
+    
+    # With auth → 200 with populated skins array
+    try:
+        headers = {"Authorization": f"Bearer {user_a_token}"}
+        resp = requests.get(f"{BASE_URL}/favorites/check", headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "listings" in data and "skins" in data:
+                if test_skin_master_id in data["skins"]:
+                    result.success(f"GET /favorites/check with auth → 200 with populated skins: {data['skins']}")
+                else:
+                    result.fail(f"GET /favorites/check should include {test_skin_master_id} in skins", json.dumps(data))
+            else:
+                result.fail("GET /favorites/check missing listings or skins", json.dumps(data))
+        else:
+            result.fail(f"GET /favorites/check should be 200, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"GET /favorites/check exception: {e}")
+
+def test_favorites_delete():
+    """Test DELETE /api/favorites"""
+    print("\n=== TEST DELETE /api/favorites ===")
+    
+    # Without auth → 401
+    try:
+        resp = requests.delete(f"{BASE_URL}/favorites?target_type=skin&target_id={test_skin_master_id}",
+                              timeout=10)
+        if resp.status_code == 401:
+            result.success("DELETE /favorites without auth → 401")
+        else:
+            result.fail(f"DELETE /favorites without auth should be 401, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"DELETE /favorites no auth exception: {e}")
+    
+    # With auth, correct params → 200
+    try:
+        headers = {"Authorization": f"Bearer {user_a_token}"}
+        resp = requests.delete(f"{BASE_URL}/favorites?target_type=skin&target_id={test_skin_master_id}",
+                              headers=headers,
+                              timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("ok") and data.get("removed") == 1:
+                result.success("DELETE /favorites → 200 with removed=1")
+            else:
+                result.fail("DELETE /favorites response incorrect", json.dumps(data))
+        else:
+            result.fail(f"DELETE /favorites should be 200, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"DELETE /favorites exception: {e}")
+    
+    # Verify count decreased
+    try:
+        headers = {"Authorization": f"Bearer {user_a_token}"}
+        resp = requests.get(f"{BASE_URL}/favorites", headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("count") == 0:
+                result.success("GET /favorites after delete → count=0")
+            else:
+                result.fail(f"GET /favorites after delete should have count=0, got {data.get('count')}", json.dumps(data))
+        else:
+            result.fail(f"GET /favorites verification failed: HTTP {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"GET /favorites verification exception: {e}")
+    
+    # Delete non-existent → removed=0 (idempotent)
+    try:
+        headers = {"Authorization": f"Bearer {user_a_token}"}
+        resp = requests.delete(f"{BASE_URL}/favorites?target_type=skin&target_id=nonexistent",
+                              headers=headers,
+                              timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("ok") and data.get("removed") == 0:
+                result.success("DELETE /favorites non-existent → 200 with removed=0")
+            else:
+                result.fail("DELETE /favorites non-existent response incorrect", json.dumps(data))
+        else:
+            result.fail(f"DELETE /favorites non-existent should be 200, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"DELETE /favorites non-existent exception: {e}")
+
+def test_notifications_get():
+    """Test GET /api/notifications"""
+    print("\n=== TEST GET /api/notifications ===")
+    
+    # Without auth → 401
+    try:
+        resp = requests.get(f"{BASE_URL}/notifications", timeout=10)
+        if resp.status_code == 401:
+            result.success("GET /notifications without auth → 401")
+        else:
+            result.fail(f"GET /notifications without auth should be 401, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"GET /notifications no auth exception: {e}")
+    
+    # With auth for fresh user → empty
+    try:
+        headers = {"Authorization": f"Bearer {user_a_token}"}
+        resp = requests.get(f"{BASE_URL}/notifications", headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "items" in data and "count" in data:
+                result.success(f"GET /notifications → 200 with {data['count']} items")
+            else:
+                result.fail("GET /notifications missing items or count", json.dumps(data))
+        else:
+            result.fail(f"GET /notifications should be 200, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"GET /notifications exception: {e}")
+
+def test_notifications_unread_count():
+    """Test GET /api/notifications/unread-count (public endpoint)"""
+    print("\n=== TEST GET /api/notifications/unread-count ===")
+    
+    # Without auth → 200 with count=0 (MUST NOT 401)
+    try:
+        resp = requests.get(f"{BASE_URL}/notifications/unread-count", timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "count" in data:
+                result.success(f"GET /notifications/unread-count without auth → 200 with count={data['count']}")
+            else:
+                result.fail("GET /notifications/unread-count missing count", json.dumps(data))
+        else:
+            result.fail(f"GET /notifications/unread-count without auth should be 200, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"GET /notifications/unread-count no auth exception: {e}")
+    
+    # With auth for fresh user → count=0
+    try:
+        headers = {"Authorization": f"Bearer {user_a_token}"}
+        resp = requests.get(f"{BASE_URL}/notifications/unread-count", headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "count" in data:
+                result.success(f"GET /notifications/unread-count with auth → 200 with count={data['count']}")
+            else:
+                result.fail("GET /notifications/unread-count missing count", json.dumps(data))
+        else:
+            result.fail(f"GET /notifications/unread-count should be 200, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"GET /notifications/unread-count exception: {e}")
+
+def test_notifications_read_all():
+    """Test POST /api/notifications/read-all"""
+    print("\n=== TEST POST /api/notifications/read-all ===")
+    
+    # Without auth → 401
+    try:
+        resp = requests.post(f"{BASE_URL}/notifications/read-all", timeout=10)
+        if resp.status_code == 401:
+            result.success("POST /notifications/read-all without auth → 401")
+        else:
+            result.fail(f"POST /notifications/read-all without auth should be 401, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"POST /notifications/read-all no auth exception: {e}")
+    
+    # With auth → 200
+    try:
+        headers = {"Authorization": f"Bearer {user_a_token}"}
+        resp = requests.post(f"{BASE_URL}/notifications/read-all", headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "ok" in data and "updated" in data:
+                result.success(f"POST /notifications/read-all → 200 with updated={data['updated']}")
+            else:
+                result.fail("POST /notifications/read-all missing ok or updated", json.dumps(data))
+        else:
+            result.fail(f"POST /notifications/read-all should be 200, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"POST /notifications/read-all exception: {e}")
+
+def test_notification_trigger_new_listing():
+    """Test notification trigger for new listing of favorited skin"""
+    print("\n=== TEST NOTIFICATION TRIGGER: NEW LISTING ===")
+    
+    # Step 1: User B favorites a skin
+    try:
+        headers = {"Authorization": f"Bearer {user_b_token}"}
+        resp = requests.post(f"{BASE_URL}/favorites",
+                            json={"target_type": "skin", "target_id": test_skin_master_id},
+                            headers=headers,
+                            timeout=10)
+        if resp.status_code == 200:
+            result.success(f"User B favorited skin {test_skin_master_id}")
+        else:
+            result.fail(f"User B favorite failed: HTTP {resp.status_code}", resp.text)
+            return
+    except Exception as e:
+        result.fail(f"User B favorite exception: {e}")
         return
     
-    # Now fetch detail for this skin
-    master_id = skin_without_price["master_id"]
-    url = f"{BACKEND_URL}/skins/detail/{master_id}"
-    resp = requests.get(url, timeout=15)
-    assert resp.status_code == 200, f"Expected 200, got {resp.status_code} for skin without market data"
+    # Step 2: Get skin details to create matching listing
+    try:
+        resp = requests.get(f"{BASE_URL}/skins/all?page_size=5", timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            items = data.get("items", [])
+            test_skin = next((s for s in items if s["master_id"] == test_skin_master_id), None)
+            if not test_skin:
+                result.fail("Could not find test skin details")
+                return
+        else:
+            result.fail(f"Failed to get skin details: HTTP {resp.status_code}", resp.text)
+            return
+    except Exception as e:
+        result.fail(f"Get skin details exception: {e}")
+        return
     
-    data = resp.json()
-    assert "skin" in data, "Missing 'skin' key"
-    skin = data["skin"]
+    # Step 3: User A needs to be verified to create listing
+    # First check if already verified
+    try:
+        headers = {"Authorization": f"Bearer {user_a_token}"}
+        # Try to create a listing - if it fails with 403, we need to verify
+        listing_payload = {
+            "skin_name": test_skin["name"],
+            "weapon": test_skin.get("weapon", ""),
+            "type": test_skin.get("type", ""),
+            "rarity": test_skin["rarity"],
+            "wear": "Field-Tested",
+            "float_value": 0.25,
+            "price_usd": 42.00,
+            "image": test_skin.get("image", ""),
+            "asset_id": "test-asset-123"
+        }
+        
+        resp = requests.post(f"{BASE_URL}/marketplace/listings",
+                            json=listing_payload,
+                            headers=headers,
+                            timeout=10)
+        
+        if resp.status_code == 403:
+            # Need to verify user - update auth_method directly via MongoDB
+            result.fail("User A not verified - cannot test new listing notification trigger", 
+                       "User needs auth_method=steam_openid but has steamid_manual (read-only mode)")
+            return
+        elif resp.status_code == 200:
+            data = resp.json()
+            global test_listing_id
+            test_listing_id = data.get("id")
+            result.success(f"User A created listing {test_listing_id} for {test_skin['name']}")
+        else:
+            result.fail(f"Create listing failed: HTTP {resp.status_code}", resp.text)
+            return
+    except Exception as e:
+        result.fail(f"Create listing exception: {e}")
+        return
     
-    # Should have market_price_usd=null and market_variants=[]
-    assert skin["market_price_usd"] is None, f"Expected market_price_usd=null, got {skin['market_price_usd']}"
-    assert skin["market_variants"] == [], f"Expected empty market_variants, got {skin['market_variants']}"
-    
-    print(f"   ✅ Skin without market data: {skin['name']}")
-    print(f"      market_price_usd=null, market_variants=[]")
-    print(f"      Falls back to reference_price_usd=${skin.get('reference_price_usd')}")
+    # Step 4: Check if User B received notification
+    try:
+        headers = {"Authorization": f"Bearer {user_b_token}"}
+        resp = requests.get(f"{BASE_URL}/notifications", headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            items = data.get("items", [])
+            new_listing_notifs = [n for n in items if n.get("type") == "new_listing"]
+            if new_listing_notifs:
+                notif = new_listing_notifs[0]
+                if test_skin["name"] in notif.get("body", ""):
+                    result.success(f"User B received new_listing notification: {notif['body']}")
+                    global test_notification_ids
+                    test_notification_ids.append(notif["id"])
+                else:
+                    result.fail("new_listing notification body doesn't contain skin name", json.dumps(notif))
+            else:
+                result.fail("User B did not receive new_listing notification", json.dumps(items))
+        else:
+            result.fail(f"Get notifications failed: HTTP {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"Get notifications exception: {e}")
 
+def test_notification_mark_read():
+    """Test POST /api/notifications/{id}/read"""
+    print("\n=== TEST POST /api/notifications/{id}/read ===")
+    
+    if not test_notification_ids:
+        print("⚠️  Skipping mark read test - no notifications to mark")
+        return
+    
+    notif_id = test_notification_ids[0]
+    
+    # Get unread count before
+    try:
+        headers = {"Authorization": f"Bearer {user_b_token}"}
+        resp = requests.get(f"{BASE_URL}/notifications/unread-count", headers=headers, timeout=10)
+        if resp.status_code == 200:
+            before_count = resp.json().get("count", 0)
+        else:
+            before_count = None
+    except Exception:
+        before_count = None
+    
+    # Mark as read
+    try:
+        headers = {"Authorization": f"Bearer {user_b_token}"}
+        resp = requests.post(f"{BASE_URL}/notifications/{notif_id}/read",
+                            headers=headers,
+                            timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("ok"):
+                result.success(f"POST /notifications/{notif_id}/read → 200")
+            else:
+                result.fail("POST /notifications/read missing ok", json.dumps(data))
+        else:
+            result.fail(f"POST /notifications/read should be 200, got {resp.status_code}", resp.text)
+    except Exception as e:
+        result.fail(f"POST /notifications/read exception: {e}")
+    
+    # Verify unread count decreased
+    if before_count is not None and before_count > 0:
+        try:
+            headers = {"Authorization": f"Bearer {user_b_token}"}
+            resp = requests.get(f"{BASE_URL}/notifications/unread-count", headers=headers, timeout=10)
+            if resp.status_code == 200:
+                after_count = resp.json().get("count", 0)
+                if after_count == before_count - 1:
+                    result.success(f"Unread count decreased from {before_count} to {after_count}")
+                else:
+                    result.fail(f"Unread count should be {before_count - 1}, got {after_count}")
+        except Exception as e:
+            result.fail(f"Verify unread count exception: {e}")
 
-# ============================================================================
-# Run all tests
-# ============================================================================
+def cleanup():
+    """Clean up test data"""
+    print("\n=== CLEANUP ===")
+    
+    # Delete favorites
+    try:
+        if user_a_token:
+            headers = {"Authorization": f"Bearer {user_a_token}"}
+            requests.delete(f"{BASE_URL}/favorites?target_type=skin&target_id={test_skin_master_id}",
+                          headers=headers, timeout=10)
+        if user_b_token:
+            headers = {"Authorization": f"Bearer {user_b_token}"}
+            requests.delete(f"{BASE_URL}/favorites?target_type=skin&target_id={test_skin_master_id}",
+                          headers=headers, timeout=10)
+            if test_listing_id:
+                requests.delete(f"{BASE_URL}/favorites?target_type=listing&target_id={test_listing_id}",
+                              headers=headers, timeout=10)
+        print("✅ Cleaned up favorites")
+    except Exception as e:
+        print(f"⚠️  Cleanup favorites warning: {e}")
+    
+    # Delete test listing
+    try:
+        if test_listing_id and user_a_token:
+            headers = {"Authorization": f"Bearer {user_a_token}"}
+            resp = requests.delete(f"{BASE_URL}/marketplace/listings/{test_listing_id}",
+                                 headers=headers, timeout=10)
+            if resp.status_code == 200:
+                print(f"✅ Deleted test listing {test_listing_id}")
+            else:
+                print(f"⚠️  Could not delete listing: HTTP {resp.status_code}")
+    except Exception as e:
+        print(f"⚠️  Cleanup listing warning: {e}")
+    
+    # Note: We don't delete users or notifications as they're part of the system state
+    print("✅ Cleanup complete (users and notifications retained)")
 
-if __name__ == "__main__":
-    print("=" * 80)
-    print("🧪 BACKEND API TESTS - Steam Market Price Sync")
-    print("=" * 80)
-    print()
+def main():
+    """Run all tests"""
+    print("="*80)
+    print("CS2 MARKETPLACE - FAVOURITES + NOTIFICATIONS BACKEND TEST")
+    print("="*80)
     
-    # Test 1: Price sync status
-    test("Test 1: GET /api/skins/price-sync-status", test_price_sync_status)
+    # Setup
+    if not test_auth_setup():
+        print("\n❌ Auth setup failed - cannot continue")
+        return 1
     
-    # Test 2: Refresh prices auth scenarios
-    test("Test 2a: POST /api/skins/refresh-prices (no token)", test_refresh_prices_no_token)
-    test("Test 2b: POST /api/skins/refresh-prices (wrong token)", test_refresh_prices_wrong_token)
-    test("Test 2c: POST /api/skins/refresh-prices (correct token)", test_refresh_prices_correct_token)
-    test("Test 2d: POST /api/skins/refresh-prices?full=true", test_refresh_prices_full_param)
+    if not test_get_test_skin():
+        print("\n❌ Could not get test skin - cannot continue")
+        return 1
     
-    # Test 3: Skins all market fields
-    test("Test 3a: GET /api/skins/all - market fields present", test_skins_all_market_fields)
-    test("Test 3b: GET /api/skins/all - find real market price", test_skins_all_find_real_price)
+    # Run tests
+    test_favorites_post_validation()
+    test_favorites_post_happy_path()
+    test_favorites_get()
+    test_favorites_check()
+    test_favorites_delete()
     
-    # Test 4: Skin detail with market data
-    test("Test 4: GET /api/skins/detail/skin-0ffd6029f447 (Aquamarine)", test_skin_detail_aquamarine)
+    test_notifications_get()
+    test_notifications_unread_count()
+    test_notifications_read_all()
     
-    # Test 5: Skin without market data
-    test("Test 5: Skin with no market data returns 200", test_skin_no_market_data)
+    test_notification_trigger_new_listing()
+    test_notification_mark_read()
+    
+    # Cleanup
+    cleanup()
     
     # Summary
-    print("=" * 80)
-    print("📊 TEST SUMMARY")
-    print("=" * 80)
-    for result in test_results:
-        print(result)
-    print()
-    print(f"✅ Passed: {passed}")
-    print(f"❌ Failed: {failed}")
-    print(f"📈 Total: {passed + failed}")
-    print("=" * 80)
-    
-    sys.exit(0 if failed == 0 else 1)
+    success = result.summary()
+    return 0 if success else 1
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -5,6 +5,7 @@ import { Toaster } from "sonner";
 
 import { AuthProvider } from "@/context/AuthContext";
 import { CurrencyProvider } from "@/context/CurrencyContext";
+import { FavoritesProvider } from "@/context/FavoritesContext";
 import Navbar from "@/components/Navbar";
 import LandingPage from "@/pages/LandingPage";
 import MarketplacePage from "@/pages/MarketplacePage";
@@ -12,6 +13,7 @@ import LiveListingsPage from "@/pages/LiveListingsPage";
 import SkinDetailPage from "@/pages/SkinDetailPage";
 import InventoryPage from "@/pages/InventoryPage";
 import OrdersPage from "@/pages/OrdersPage";
+import FavoritesPage from "@/pages/FavoritesPage";
 import CheckoutSuccess from "@/pages/CheckoutSuccess";
 import CheckoutCancel from "@/pages/CheckoutCancel";
 import SteamCallback from "@/pages/SteamCallback";
@@ -20,6 +22,7 @@ function App() {
   return (
     <AuthProvider>
       <CurrencyProvider>
+        <FavoritesProvider>
         <BrowserRouter>
           <div className="min-h-screen bg-[#0A0A0A] grain relative">
             <Navbar />
@@ -31,6 +34,7 @@ function App() {
                 <Route path="/skin/:masterId" element={<SkinDetailPage />} />
                 <Route path="/inventory" element={<InventoryPage />} />
                 <Route path="/orders" element={<OrdersPage />} />
+                <Route path="/favorites" element={<FavoritesPage />} />
                 <Route path="/auth/callback" element={<SteamCallback />} />
                 <Route path="/checkout/success" element={<CheckoutSuccess />} />
                 <Route path="/checkout/cancel" element={<CheckoutCancel />} />
@@ -50,6 +54,7 @@ function App() {
             />
           </div>
         </BrowserRouter>
+        </FavoritesProvider>
       </CurrencyProvider>
     </AuthProvider>
   );

@@ -41,6 +41,23 @@ User wants a marketplace to buy/sell CS2 skins where users login via Steam ID, s
 - Background asyncio scheduler refreshes prices every 6h, defaults to
   top-6000 most-listed items per run (fast + rate-limit friendly)
 
+## Favourites & Notifications (Aug 2026)
+- Users can heart any master skin OR any specific listing from the Marketplace and Skin Detail pages.
+- Data model:
+  - `favorites` collection: `{id, user_id, target_type: "listing"|"skin", target_id, snapshot, created_at}` with unique index on (user_id, target_type, target_id).
+  - `notifications` collection: `{id, user_id, type, title, body, target_type, target_id, snapshot, read, created_at}` with indexes on (user_id, created_at desc) + (user_id, read).
+- Endpoints:
+  - `POST/DELETE/GET /api/favorites` + `GET /api/favorites/check` (bulk heart-state lookup for UI).
+  - `GET /api/notifications`, `GET /api/notifications/unread-count`, `POST /api/notifications/{id}/read`, `POST /api/notifications/read-all`.
+- Triggers:
+  - **Listing sold** → notify everyone who favorited that listing (fires from both Stripe webhook AND order-status sync path, skipping the buyer themselves).
+  - **New listing created** → notify everyone who favorited the underlying master skin (skipping the seller themselves).
+- UI:
+  - `HeartButton` component on every marketplace card + skin detail main panel + each seller-listing row (`stopPropagation` so clicking heart inside a wrapping `<Link>` doesn't navigate).
+  - `NotificationBell` in navbar with unread badge, opens dropdown, click-to-mark-read + "Mark all read" bulk action.
+  - Dedicated `/favorites` page listing all liked items with status pill (Available / Sold / Unavailable), trash-to-remove, live current price.
+- `FavoritesContext` provides in-memory heart-state Set + unread count, poll refreshes every 45s while logged in.
+
 ## Category Sidebar + Containers (Jul 2026)
 - Left-side popup/sidebar (`CategorySidebar.jsx`) with three groups:
   Weapons, Melee & Gear, Containers. Persistent column on desktop,

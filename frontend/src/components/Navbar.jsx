@@ -1,11 +1,12 @@
 import React, { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { FaSteam } from "react-icons/fa";
-import { LogOut, ChevronDown } from "lucide-react";
+import { LogOut, ChevronDown, Heart } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../context/AuthContext";
 import { useCurrency } from "../context/CurrencyContext";
 import api from "../lib/api";
+import NotificationBell from "./NotificationBell";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -105,7 +106,21 @@ export default function Navbar() {
           </DropdownMenu>
 
           {user ? (
-            <DropdownMenu>
+            <>
+              <NotificationBell />
+              <Link
+                to="/favorites"
+                data-testid="nav-favorites"
+                className={`flex items-center justify-center w-9 h-9 rounded-sm border transition-colors ${
+                  loc.pathname === "/favorites"
+                    ? "bg-[#EB4B4B]/10 border-[#EB4B4B]/50 text-[#EB4B4B]"
+                    : "bg-[#121212] border-white/10 hover:border-[#EB4B4B]/40 hover:text-[#EB4B4B] text-[#E0E0E0]"
+                }`}
+                title="Favourites"
+              >
+                <Heart className={`w-4 h-4 ${loc.pathname === "/favorites" ? "fill-current" : ""}`} />
+              </Link>
+              <DropdownMenu>
               <DropdownMenuTrigger
                 data-testid="user-menu-trigger"
                 className="flex items-center gap-2 px-3 py-1.5 bg-[#121212] border border-white/10 hover:border-[#E4AE39]/50 rounded-sm transition-colors"
@@ -125,6 +140,11 @@ export default function Navbar() {
                 <DropdownMenuItem asChild className="cursor-pointer focus:bg-white/10">
                   <Link to="/orders" data-testid="menu-orders">My Orders</Link>
                 </DropdownMenuItem>
+                <DropdownMenuItem asChild className="cursor-pointer focus:bg-white/10">
+                  <Link to="/favorites" data-testid="menu-favorites">
+                    <Heart className="w-4 h-4 mr-2 text-[#EB4B4B]" /> Favourites
+                  </Link>
+                </DropdownMenuItem>
                 <DropdownMenuSeparator className="bg-white/10" />
                 <DropdownMenuItem
                   onSelect={logout}
@@ -135,6 +155,7 @@ export default function Navbar() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            </>
           ) : (
             <DropdownMenu>
               <DropdownMenuTrigger
