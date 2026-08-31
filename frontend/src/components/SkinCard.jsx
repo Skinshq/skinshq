@@ -27,7 +27,7 @@ export default function SkinCard({ item, onClick, actionLabel = "Buy Now", testi
           <img
             src={item.image}
             alt={item.skin_name || item.market_name}
-            className="absolute inset-0 w-full h-full object-cover mix-blend-luminosity group-hover:mix-blend-normal transition-all duration-300"
+            className="absolute inset-0 w-full h-full object-contain p-3 transition-transform duration-300 group-hover:scale-105"
             loading="lazy"
           />
         ) : (

@@ -136,7 +136,7 @@ export default function MarketplacePage() {
                 <div className="relative aspect-[4/3] bg-gradient-to-br from-[#0A0A0A] via-[#121212] to-[#050505] overflow-hidden">
                   <div className={`absolute inset-0 rarity-bg-${s.rarity}`} />
                   <img src={s.image} alt={s.name} loading="lazy"
-                    className="absolute inset-0 w-full h-full object-cover mix-blend-luminosity group-hover:mix-blend-normal transition-all duration-300" />
+                    className="absolute inset-0 w-full h-full object-contain p-3 transition-transform duration-300 group-hover:scale-105" />
                   <div className={`absolute top-2 left-2 text-[10px] uppercase tracking-[0.2em] font-bold rarity-text-${s.rarity} bg-black/60 px-2 py-0.5 rounded-sm backdrop-blur-sm`}>
                     {rarityLabel[s.rarity]}
                   </div>
