@@ -185,7 +185,7 @@ function UsersTab() {
   const [selected, setSelected] = useState(null);
   const [detail, setDetail] = useState(null);
   const [banReason, setBanReason] = useState("");
-  const limit = 50;
+  const limit = 100;
 
   const load = () => {
     setLoading(true);

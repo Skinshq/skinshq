@@ -161,6 +161,7 @@ class ProfileUpdate(BaseModel):
     trade_url: Optional[str] = None
     bio: Optional[str] = None
     socials: Optional[dict] = None   # {twitter, discord, instagram, youtube, twitch}
+    profile_public: Optional[bool] = None
 
 
 class NotificationPrefs(BaseModel):
@@ -1356,6 +1357,7 @@ async def me_profile(user=Depends(get_current_user)):
         "trade_url": user.get("trade_url"),
         "bio": user.get("bio"),
         "socials": user.get("socials") or {},
+        "profile_public": user.get("profile_public", True),
         "notification_prefs": prefs,
         "wallet_balance_usd": round(float(user.get("wallet_balance_usd", 0.0)), 2),
     }
@@ -1380,6 +1382,8 @@ async def update_profile(payload: ProfileUpdate, user=Depends(get_current_user))
                 if v:
                     clean[k] = v
         upd["socials"] = clean
+    if payload.profile_public is not None:
+        upd["profile_public"] = bool(payload.profile_public)
     if not upd:
         return {"ok": True, "updated": 0}
     await db.users.update_one({"id": user["id"]}, {"$set": upd})

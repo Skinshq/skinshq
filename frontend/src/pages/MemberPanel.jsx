@@ -30,12 +30,15 @@ function ProfileTab({ profile, stats, badges, onSaved }) {
   const [tradeUrl, setTradeUrl] = useState(profile.trade_url || "");
   const [bio, setBio] = useState(profile.bio || "");
   const [socials, setSocials] = useState(profile.socials || {});
+  const [isPublic, setIsPublic] = useState(profile.profile_public !== false);
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
     setSaving(true);
     try {
-      const { data } = await api.patch("/me/profile", { trade_url: tradeUrl, bio, socials });
+      const { data } = await api.patch("/me/profile", {
+        trade_url: tradeUrl, bio, socials, profile_public: isPublic,
+      });
       toast.success("Profile saved");
       onSaved?.(data.user);
     } catch (e) {
@@ -122,6 +125,29 @@ function ProfileTab({ profile, stats, badges, onSaved }) {
 
       {/* RIGHT: form */}
       <div className="lg:col-span-2 space-y-4">
+        <div className="bg-[#121212] border border-white/10 rounded-sm p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <User className="w-4 h-4 text-[#E4AE39]" />
+            <h3 className="font-display font-black text-lg tracking-tight">Profile visibility</h3>
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="flex-1 pr-4">
+              <div className="text-sm font-medium">
+                {isPublic ? "Public profile" : "Private profile"}
+              </div>
+              <div className="text-[11px] text-[#8A8A8A] mt-0.5">
+                {isPublic
+                  ? "Other traders can view your display name, bio, badges, and socials on your public profile page."
+                  : "Your profile is hidden. Buyers can still see your seller name on listings, but they cannot view your bio, socials, or trader stats."}
+              </div>
+            </div>
+            <button onClick={() => setIsPublic(!isPublic)} data-testid="profile-public-toggle"
+              className={`relative w-11 h-6 rounded-full transition-colors ${isPublic ? "bg-[#2ECC71]" : "bg-white/10"}`}>
+              <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform ${isPublic ? "translate-x-5" : "translate-x-0.5"}`} />
+            </button>
+          </div>
+        </div>
+
         <div className="bg-[#121212] border border-white/10 rounded-sm p-5">
           <div className="flex items-center gap-2 mb-4">
             <Handshake className="w-4 h-4 text-[#E4AE39]" />

@@ -116,20 +116,15 @@ export default function CategorySidebar({ selected, onSelect, isOpen, onClose })
 
   return (
     <>
-      {/* Desktop rail */}
-      <aside className="hidden lg:block w-60 shrink-0 sticky top-16 self-start max-h-[calc(100vh-4rem)] overflow-y-auto border-r border-white/5 bg-[#0A0A0A]">
-        {content}
-      </aside>
-
-      {/* Mobile drawer */}
+      {/* Slide-out drawer on ALL screen sizes — opened via hamburger button */}
       {isOpen && (
-        <div className="lg:hidden fixed inset-0 z-50 flex" data-testid="mobile-drawer">
+        <div className="fixed inset-0 z-50 flex" data-testid="categories-drawer">
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
           <aside className="relative w-72 max-w-[85%] h-full bg-[#0A0A0A] border-r border-white/10 overflow-y-auto animate-in slide-in-from-left duration-200">
             <button
               type="button"
               onClick={onClose}
-              className="absolute top-3 right-3 p-1.5 bg-white/5 hover:bg-white/10 rounded-sm"
+              className="absolute top-3 right-3 p-1.5 bg-white/5 hover:bg-white/10 rounded-sm z-10"
               data-testid="drawer-close"
             >
               <X className="w-4 h-4" />

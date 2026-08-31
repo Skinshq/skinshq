@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from "react";
-import { Search, X, Radio } from "lucide-react";
+import { Search, X, Radio, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { useSearchParams } from "react-router-dom";
 import api from "../lib/api";
 import SkinCard from "../components/SkinCard";
 import { useAuth } from "../context/AuthContext";
+import CategorySidebar from "../components/CategorySidebar";
 
 const RARITIES = [
   { key: "consumer", label: "Consumer" },
@@ -25,8 +26,10 @@ export default function LiveListingsPage() {
   const [q, setQ] = useState(params.get("skin") || "");
   const [rarity, setRarity] = useState("");
   const [wear, setWear] = useState("");
+  const [wtype, setWtype] = useState("");
   const [sort, setSort] = useState("price_asc");
   const [buying, setBuying] = useState(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -35,13 +38,14 @@ export default function LiveListingsPage() {
       if (q) p.search = q;
       if (rarity) p.rarity = rarity;
       if (wear) p.wear = wear;
+      if (wtype) p.weapon_type = wtype;
       const { data } = await api.get("/marketplace/listings", { params: p });
       setListings(data.items || []);
     } catch { toast.error("Failed to load listings"); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { load(); }, [rarity, wear, sort, q]);
+  useEffect(() => { load(); }, [rarity, wear, wtype, sort, q]);
 
   const buy = async (l) => {
     if (!user) { toast.error("Sign in with Steam first"); loginWithSteam(); return; }
@@ -58,15 +62,35 @@ export default function LiveListingsPage() {
   const activeFilters = [rarity, wear].filter(Boolean).length + (q ? 1 : 0);
 
   return (
-    <div className="max-w-7xl mx-auto px-6 lg:px-12 py-10">
+    <div>
+      <CategorySidebar
+        selected={wtype}
+        onSelect={(t) => setWtype(t)}
+        isOpen={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+      />
+      <div className="max-w-7xl mx-auto px-6 lg:px-12 py-10">
       <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
-        <div>
+        <div className="flex items-start gap-3">
+          <button
+            type="button"
+            onClick={() => setDrawerOpen(true)}
+            data-testid="open-drawer"
+            className="mt-1 flex items-center gap-2 bg-[#121212] border border-white/10 hover:border-[#E4AE39]/50 px-3 py-2 rounded-sm text-xs uppercase tracking-widest"
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5" />
+            Categories
+          </button>
+          <div>
           <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.3em] text-[#2ECC71] font-mono mb-2">
             <Radio className="w-3 h-3 animate-pulse" /> Live from sellers
           </div>
-          <h1 className="font-display font-black text-3xl lg:text-4xl tracking-tight">Live listings</h1>
+          <h1 className="font-display font-black text-3xl lg:text-4xl tracking-tight">
+            {wtype ? `Live ${wtype}` : "Live listings"}
+          </h1>
           <div className="text-sm text-[#8A8A8A] mt-2">
             {loading ? "Loading…" : `${listings.length} skin${listings.length === 1 ? "" : "s"} listed by traders right now`}
+          </div>
           </div>
         </div>
         <select value={sort} onChange={(e) => setSort(e.target.value)} data-testid="sort-select"
@@ -132,6 +156,7 @@ export default function LiveListingsPage() {
           ))}
         </div>
       )}
+      </div>
     </div>
   );
 }
