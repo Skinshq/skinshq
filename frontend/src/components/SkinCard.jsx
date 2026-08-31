@@ -22,7 +22,7 @@ export default function SkinCard({ item, onClick, actionLabel = "Buy Now", testi
     >
       {/* Image */}
       <div className="relative aspect-[4/3] bg-gradient-to-br from-[#0A0A0A] via-[#121212] to-[#050505] overflow-hidden">
-        <div className={`absolute inset-0 opacity-40 rarity-bg-${rarity}`} />
+        <div className={`absolute inset-0 rarity-bg-${rarity}`} />
         {item.image ? (
           <img
             src={item.image}

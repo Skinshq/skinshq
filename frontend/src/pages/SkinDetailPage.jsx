@@ -74,7 +74,7 @@ export default function SkinDetailPage() {
         {/* Image + rarity strip */}
         <div>
           <div className={`relative aspect-[4/3] bg-gradient-to-br from-[#0A0A0A] via-[#121212] to-[#050505] overflow-hidden rounded-sm rarity-border-${rarity}`}>
-            <div className={`absolute inset-0 opacity-30 rarity-bg-${rarity}`} />
+            <div className={`absolute inset-0 opacity-90 rarity-bg-${rarity}`} />
             <img src={skin.image} alt={skin.name}
               className="absolute inset-0 w-full h-full object-contain p-8" />
           </div>

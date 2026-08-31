@@ -109,7 +109,7 @@ export default function FavoritesPage() {
               <div key={f.id} className={`bg-[#121212] rounded-sm overflow-hidden rarity-border-${rarity} flex flex-col`}
                 data-testid={`fav-${f.id}`}>
                 <Link to={href} className="relative aspect-[4/3] bg-gradient-to-br from-[#0A0A0A] via-[#121212] to-[#050505] overflow-hidden">
-                  <div className={`absolute inset-0 opacity-30 rarity-bg-${rarity}`} />
+                  <div className={`absolute inset-0 opacity-90 rarity-bg-${rarity}`} />
                   {s.image && (
                     <img src={s.image} alt="" loading="lazy"
                       className="absolute inset-0 w-full h-full object-contain p-4" />

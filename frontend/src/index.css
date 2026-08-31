@@ -133,26 +133,49 @@ h6,
     color: var(--r-contraband);
 }
 
+/* CS2 case-opening style gradient — bright rarity glow rising from the bottom,
+   permanent (not hover-only), mimics the loot-reveal background. */
 .rarity-bg-consumer {
-    background: rgba(176, 195, 217, 0.12);
+    background: radial-gradient(ellipse at 50% 100%,
+        rgba(176, 195, 217, 0.55) 0%,
+        rgba(176, 195, 217, 0.25) 35%,
+        rgba(10, 10, 10, 0) 75%);
 }
 .rarity-bg-industrial {
-    background: rgba(94, 152, 217, 0.12);
+    background: radial-gradient(ellipse at 50% 100%,
+        rgba(94, 152, 217, 0.65) 0%,
+        rgba(94, 152, 217, 0.3) 35%,
+        rgba(10, 10, 10, 0) 75%);
 }
 .rarity-bg-milspec {
-    background: rgba(75, 105, 255, 0.12);
+    background: radial-gradient(ellipse at 50% 100%,
+        rgba(75, 105, 255, 0.7) 0%,
+        rgba(75, 105, 255, 0.35) 35%,
+        rgba(10, 10, 10, 0) 75%);
 }
 .rarity-bg-restricted {
-    background: rgba(136, 71, 255, 0.12);
+    background: radial-gradient(ellipse at 50% 100%,
+        rgba(136, 71, 255, 0.7) 0%,
+        rgba(136, 71, 255, 0.35) 35%,
+        rgba(10, 10, 10, 0) 75%);
 }
 .rarity-bg-classified {
-    background: rgba(211, 44, 230, 0.12);
+    background: radial-gradient(ellipse at 50% 100%,
+        rgba(211, 44, 230, 0.7) 0%,
+        rgba(211, 44, 230, 0.35) 35%,
+        rgba(10, 10, 10, 0) 75%);
 }
 .rarity-bg-covert {
-    background: rgba(235, 75, 75, 0.12);
+    background: radial-gradient(ellipse at 50% 100%,
+        rgba(235, 75, 75, 0.75) 0%,
+        rgba(235, 75, 75, 0.4) 35%,
+        rgba(10, 10, 10, 0) 75%);
 }
 .rarity-bg-contraband {
-    background: rgba(228, 174, 57, 0.12);
+    background: radial-gradient(ellipse at 50% 100%,
+        rgba(228, 174, 57, 0.8) 0%,
+        rgba(228, 174, 57, 0.45) 35%,
+        rgba(10, 10, 10, 0) 75%);
 }
 
 /* Skin card hover glow */
