@@ -19,6 +19,8 @@ User wants a marketplace to buy/sell CS2 skins where users login via Steam ID, s
 ## Latest Changes (Feb 2026, this session)
 - Democratized "Email notifications" toggle in Member Panel → no longer premium-gated (all users can enable email alerts)
 - Fixed toggle knob overflow bug in Profile Visibility + Notifications tabs (knob was rendering 18px outside the pill track when ON — added explicit `left-0.5` + `p-0` to constrain positioning against browser default button padding)
+- **CS2-style 7-day trade lock on all purchases**: Every paid order now gets `trade_locked_until = paid_at + 7d`. Buyer sees the item under **Your Inventory → Recently purchased** with a lock overlay + live "🔒 LOCKED · Xd Yh Zm" countdown, plus a "tradable {date}" hint. Orders page shows the same badge. When the timer hits zero, badge flips to green "✓ Tradable". Admin can skip the wait via `POST /api/admin/orders/{id}/force-unlock` (tested end-to-end).
+
 - **P2P Transaction Emails via Resend LIVE**: Two flows wired to `POST /api/marketplace/listings` (seller gets "Your listing is live") and `POST /api/orders/{id}/confirm-trade` (buyer + seller each get "Trade completed"). Gated by user's `email_notifications` pref (now `True` by default for all users). Uses `asyncio.create_task` for fire-and-forget non-blocking sends. Sandbox sender `onboarding@resend.dev` — deliverable only to email addresses verified on the Resend account until a custom domain is added.
 
 

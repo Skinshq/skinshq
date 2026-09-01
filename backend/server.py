@@ -595,6 +595,9 @@ async def require_verified(user=Depends(get_current_user)):
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "onboarding@resend.dev")
 
+# CS2 in-game trade hold — Steam locks freshly-received items for 7 days
+TRADE_LOCK_DAYS = 7
+
 
 async def send_email_code(to_email: str, code: str, purpose: str = "verify") -> bool:
     """Send a 6-digit code via Resend. If no key configured, log the code (dev mode)."""
@@ -1092,10 +1095,13 @@ async def order_status(order_id: str, request: Request, user=Depends(get_current
             status_resp = await checkout.get_checkout_status(order["stripe_session_id"])
             if status_resp.payment_status == "paid":
                 # Idempotent update
+                now = datetime.now(timezone.utc)
+                unlock_at = now + timedelta(days=TRADE_LOCK_DAYS)
                 res = await db.orders.update_one(
                     {"id": order_id, "status": "pending"},
                     {"$set": {"status": "paid", "trade_status": "trade_sent",
-                              "paid_at": datetime.now(timezone.utc).isoformat()}}
+                              "paid_at": now.isoformat(),
+                              "trade_locked_until": unlock_at.isoformat()}}
                 )
                 if res.modified_count:
                     await db.listings.update_one(
@@ -1134,10 +1140,13 @@ async def stripe_webhook(request: Request):
     if event.payment_status == "paid" and event.session_id:
         order_id = (event.metadata or {}).get("order_id")
         if order_id:
+            now = datetime.now(timezone.utc)
+            unlock_at = now + timedelta(days=TRADE_LOCK_DAYS)
             res = await db.orders.update_one(
                 {"id": order_id, "status": "pending"},
                 {"$set": {"status": "paid", "trade_status": "trade_sent",
-                          "paid_at": datetime.now(timezone.utc).isoformat()}}
+                          "paid_at": now.isoformat(),
+                          "trade_locked_until": unlock_at.isoformat()}}
             )
             if res.modified_count:
                 order = await db.orders.find_one({"id": order_id}, {"_id": 0})
@@ -2019,6 +2028,23 @@ async def admin_promote(steam_id: Optional[str] = None,
     if not res.matched_count:
         raise HTTPException(404, "User not found")
     return {"ok": True, "promoted": True}
+
+
+@api.post("/admin/orders/{order_id}/force-unlock")
+async def admin_force_unlock_order(order_id: str, _: dict = Depends(get_admin_user)):
+    """Skip the 7-day CS2 trade lock on a paid order — for testing the trade flow."""
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if order.get("status") != "paid":
+        raise HTTPException(400, "Order is not in a paid state")
+    # Set the lock to the past so the item becomes immediately tradable
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    await db.orders.update_one(
+        {"id": order_id},
+        {"$set": {"trade_locked_until": past, "trade_lock_forced": True}}
+    )
+    return {"ok": True, "order_id": order_id, "trade_locked_until": past}
 
 
 @api.get("/admin/stats")

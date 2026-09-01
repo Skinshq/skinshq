@@ -17,6 +17,7 @@ export default function InventoryPage() {
   const [price, setPrice] = useState("");
   const [listing, setListing] = useState(false);
   const [myListings, setMyListings] = useState([]);
+  const [purchases, setPurchases] = useState([]);
   const [verifyOpen, setVerifyOpen] = useState(false);
   const [verifyStep, setVerifyStep] = useState(1);
   const [email, setEmail] = useState("");
@@ -49,14 +50,16 @@ export default function InventoryPage() {
     if (!user) return;
     setLoading(true);
     try {
-      const [inv, mine] = await Promise.all([
+      const [inv, mine, orders] = await Promise.all([
         api.get("/inventory/cs2"),
         api.get("/my/listings"),
+        api.get("/my/orders"),
       ]);
       setItems(inv.data.items || []);
       setIsDemo(!!inv.data.is_demo);
       setMessage(inv.data.message || "");
       setMyListings(mine.data.items || []);
+      setPurchases((orders.data.buys || []).filter(o => o.status === "paid"));
     } catch (e) {
       toast.error("Failed to load inventory");
     } finally {
@@ -173,6 +176,21 @@ export default function InventoryPage() {
             </a>.
           </div>
         </div>
+      )}
+
+      {/* Purchased items — CS2 7-day trade hold */}
+      {purchases.length > 0 && (
+        <section className="mb-12">
+          <h2 className="font-display font-bold text-xl mb-1 tracking-tight">Recently purchased</h2>
+          <p className="text-xs text-[#8A8A8A] mb-4 font-mono">
+            Items you bought sit here during the CS2 7-day trade hold — same rule Steam enforces on freshly-received skins.
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+            {purchases.map((o) => (
+              <PurchasedCard key={o.id} order={o} />
+            ))}
+          </div>
+        </section>
       )}
 
       {/* My active listings */}
@@ -338,4 +356,59 @@ function guessType(weapon, full) {
   if (/mp7|mp9|mac-10|p90|ump/i.test(weapon)) return "SMG";
   if (/nova|xm1014|mag-7|sawed/i.test(weapon)) return "Shotgun";
   return "Pistol";
+}
+
+function PurchasedCard({ order }) {
+  const [now, setNow] = React.useState(Date.now());
+  React.useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(t);
+  }, []);
+  const snap = order.listing_snapshot || {};
+  const lockUntil = order.trade_locked_until ? new Date(order.trade_locked_until).getTime() : 0;
+  const diff = lockUntil - now;
+  const locked = diff > 0;
+  const d = Math.floor(diff / 86400000);
+  const h = Math.floor((diff % 86400000) / 3600000);
+  const m = Math.floor((diff % 3600000) / 60000);
+  const parts = d > 0 ? `${d}d ${h}h ${m}m` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+  const unlockDate = lockUntil
+    ? new Date(lockUntil).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : "—";
+  return (
+    <div className="relative bg-[#121212] border border-white/5 rounded-sm overflow-hidden group"
+         data-testid={`purchased-${order.id}`}>
+      <div className="aspect-square bg-[#0A0A0A] flex items-center justify-center p-4 relative">
+        {snap.image ? (
+          <img src={snap.image} alt="" className={`max-w-full max-h-full object-contain transition-all ${locked ? "opacity-70" : ""}`} />
+        ) : (
+          <div className="text-[#333] text-xs">no image</div>
+        )}
+        {locked && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/40 pointer-events-none">
+            <div className="text-4xl">🔒</div>
+          </div>
+        )}
+      </div>
+      <div className="p-3 border-t border-white/5">
+        <div className={`text-[9px] uppercase tracking-widest font-bold rarity-text-${snap.rarity || "consumer"}`}>
+          {snap.rarity}
+        </div>
+        <div className="text-xs font-medium truncate mt-0.5">{snap.skin_name}</div>
+        {snap.wear && <div className="text-[10px] text-[#8A8A8A] mt-0.5">{snap.wear}</div>}
+        {locked ? (
+          <div className="mt-2">
+            <div className="inline-flex items-center gap-1 bg-[#EB4B4B]/15 border border-[#EB4B4B]/40 text-[#EB4B4B] text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded-sm">
+              🔒 Locked · {parts}
+            </div>
+            <div className="text-[9px] text-[#555] font-mono mt-1">tradable {unlockDate}</div>
+          </div>
+        ) : (
+          <div className="mt-2 inline-flex items-center gap-1 bg-[#2ECC71]/15 border border-[#2ECC71]/40 text-[#2ECC71] text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded-sm">
+            ✓ Tradable
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }

@@ -75,6 +75,7 @@ export default function OrdersPage() {
               <div className="text-right">
                 <div className="font-mono font-bold text-[#E4AE39]">{format(o.amount_usd)}</div>
                 <StatusBadge status={o.status} tradeStatus={o.trade_status} />
+                <TradeLock lockUntil={o.trade_locked_until} status={o.status} />
               </div>
               <Link
                 to={`/checkout/success?order_id=${o.id}`}
@@ -114,4 +115,38 @@ function StatusBadge({ status, tradeStatus }) {
     : status === "paid" ? "text-[#4B69FF]"
     : "text-[#8A8A8A]";
   return <div className={`text-[10px] uppercase tracking-widest ${color} font-bold mt-1`}>{label}</div>;
+}
+
+// Live countdown until CS2 7-day trade hold expires
+function TradeLock({ lockUntil, status }) {
+  const [now, setNow] = React.useState(Date.now());
+  React.useEffect(() => {
+    if (status !== "paid" || !lockUntil) return;
+    const t = setInterval(() => setNow(Date.now()), 60000); // tick every minute
+    return () => clearInterval(t);
+  }, [lockUntil, status]);
+  if (status !== "paid" || !lockUntil) return null;
+  const target = new Date(lockUntil).getTime();
+  const diff = target - now;
+  if (diff <= 0) {
+    return (
+      <div data-testid="trade-unlocked" className="mt-1.5 inline-flex items-center gap-1 bg-[#2ECC71]/15 border border-[#2ECC71]/40 text-[#2ECC71] text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-sm">
+        ✓ Tradable
+      </div>
+    );
+  }
+  const d = Math.floor(diff / 86400000);
+  const h = Math.floor((diff % 86400000) / 3600000);
+  const m = Math.floor((diff % 3600000) / 60000);
+  const parts = d > 0 ? `${d}d ${h}h ${m}m` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+  const unlockDate = new Date(lockUntil).toLocaleString(undefined,
+    { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return (
+    <div data-testid="trade-locked" className="mt-1.5">
+      <div className="inline-flex items-center gap-1 bg-[#EB4B4B]/15 border border-[#EB4B4B]/40 text-[#EB4B4B] text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-sm">
+        🔒 Locked · {parts}
+      </div>
+      <div className="text-[9px] text-[#555] font-mono mt-0.5">tradable {unlockDate}</div>
+    </div>
+  );
 }
