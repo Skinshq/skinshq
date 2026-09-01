@@ -19,6 +19,8 @@ User wants a marketplace to buy/sell CS2 skins where users login via Steam ID, s
 ## Latest Changes (Feb 2026, this session)
 - Democratized "Email notifications" toggle in Member Panel → no longer premium-gated (all users can enable email alerts)
 - Fixed toggle knob overflow bug in Profile Visibility + Notifications tabs (knob was rendering 18px outside the pill track when ON — added explicit `left-0.5` + `p-0` to constrain positioning against browser default button padding)
+- **P2P Transaction Emails via Resend LIVE**: Two flows wired to `POST /api/marketplace/listings` (seller gets "Your listing is live") and `POST /api/orders/{id}/confirm-trade` (buyer + seller each get "Trade completed"). Gated by user's `email_notifications` pref (now `True` by default for all users). Uses `asyncio.create_task` for fire-and-forget non-blocking sends. Sandbox sender `onboarding@resend.dev` — deliverable only to email addresses verified on the Resend account until a custom domain is added.
+
 
 ## Implemented (Feb 2026)
 - Steam OpenID login flow (real, needs user's Steam API key optional for player summary)

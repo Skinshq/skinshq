@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import asyncio
 import logging
 import uuid
 import re
@@ -621,6 +622,49 @@ async def send_email_code(to_email: str, code: str, purpose: str = "verify") -> 
     return True
 
 
+async def send_transactional_email(to_email: str, subject: str, html: str) -> bool:
+    """Fire-and-forget style Resend send with the same dev-mode fallback."""
+    if not to_email or "@" not in to_email:
+        return False
+    if not RESEND_API_KEY:
+        log.warning(f"[EMAIL DEV MODE] To={to_email} Subject={subject!r} (set RESEND_API_KEY to send real emails)")
+        return True
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.post("https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+                json={"from": EMAIL_FROM, "to": [to_email], "subject": subject, "html": html})
+        if r.status_code >= 300:
+            log.error(f"Resend send error {r.status_code}: {r.text}")
+            return False
+    except Exception as e:
+        log.error(f"Resend transactional error: {e}")
+        return False
+    return True
+
+
+def _email_wants(user: dict, key: str) -> bool:
+    """Check user has email + wants email_notifications + wants this specific event."""
+    if not user or not user.get("email"):
+        return False
+    prefs = {**DEFAULT_NOTIFICATION_PREFS, **(user.get("notification_prefs") or {})}
+    return bool(prefs.get("email_notifications") and prefs.get(key, True))
+
+
+def _email_shell(inner_html: str) -> str:
+    """Consistent dark-themed HTML wrapper."""
+    return f"""<div style='font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0A0A0A;color:#E0E0E0;padding:32px;max-width:560px;margin:0 auto;'>
+      <div style='border-bottom:1px solid #E4AE3940;padding-bottom:12px;margin-bottom:24px;'>
+        <span style='color:#E4AE39;font-weight:900;letter-spacing:-0.02em;font-size:22px;'>SKIN.MRKT</span>
+      </div>
+      {inner_html}
+      <p style='color:#555;font-size:11px;margin-top:32px;border-top:1px solid #222;padding-top:16px;'>
+        You're receiving this because email notifications are enabled on your SKIN.MRKT account.
+        Manage preferences at <a href='{FRONTEND_URL}/me?tab=notifs' style='color:#E4AE39;'>your notification settings</a>.
+      </p>
+    </div>"""
+
+
 class EmailInit(BaseModel):
     email: str
 
@@ -913,6 +957,34 @@ async def create_listing(payload: ListingCreate, user=Depends(require_verified))
         await _notify_matching_buy_orders(listing)
     except Exception as e:
         log.warning(f"buy-order match notify failed: {e}")
+    # Email seller that their listing is live
+    try:
+        if _email_wants(user, "on_listing_sold"):
+            price = listing["price_usd"]
+            skin = listing["skin_name"]
+            wear = listing.get("wear") or ""
+            img = listing.get("image") or ""
+            listing_url = f"{FRONTEND_URL}/market"
+            img_html = (f"<img src='{img}' alt='' style='max-width:100%;border-radius:4px;"
+                        f"background:#121212;padding:12px;margin:16px 0;' />") if img else ""
+            html = _email_shell(f"""
+              <h2 style='color:#fff;margin:0 0 8px;font-size:20px;letter-spacing:-0.02em;'>Your listing is live</h2>
+              <p style='color:#B0B0B0;font-size:14px;margin:0 0 20px;'>
+                <b style='color:#fff;'>{skin}</b>{f" ({wear})" if wear else ""} is now on the marketplace.
+              </p>
+              {img_html}
+              <div style='background:#121212;border:1px solid #E4AE3940;border-radius:4px;padding:16px;margin:16px 0;'>
+                <div style='color:#8A8A8A;font-size:11px;text-transform:uppercase;letter-spacing:2px;'>Asking price</div>
+                <div style='color:#E4AE39;font-size:26px;font-weight:900;margin-top:4px;'>${price:.2f}</div>
+              </div>
+              <a href='{listing_url}' style='display:inline-block;background:#E4AE39;color:#0A0A0A;
+                 font-weight:900;padding:12px 24px;text-decoration:none;border-radius:2px;
+                 letter-spacing:2px;font-size:12px;text-transform:uppercase;'>View marketplace</a>
+            """)
+            asyncio.create_task(send_transactional_email(user["email"],
+                f"Your {skin} listing is live on SKIN.MRKT", html))
+    except Exception as e:
+        log.warning(f"listing-live email failed: {e}")
     return listing
 
 
@@ -1103,6 +1175,39 @@ async def confirm_trade(order_id: str, user=Depends(get_current_user)):
         {"$set": {"trade_status": "completed",
                   "completed_at": datetime.now(timezone.utc).isoformat()}}
     )
+    # Email both buyer + seller that the trade completed
+    try:
+        buyer = await db.users.find_one({"id": order.get("buyer_id")})
+        seller = await db.users.find_one({"id": order.get("seller_id")})
+        skin = order.get("skin_name") or "your skin"
+        price = float(order.get("price_usd") or 0)
+        img = order.get("image") or ""
+        img_html = (f"<img src='{img}' alt='' style='max-width:100%;border-radius:4px;"
+                    f"background:#121212;padding:12px;margin:16px 0;' />") if img else ""
+
+        def _trade_html(role: str) -> str:
+            headline = "Trade completed — item received" if role == "buyer" else "Trade completed — funds released"
+            body = (f"You've confirmed receipt of <b style='color:#fff;'>{skin}</b>. "
+                    f"The trade is now closed and escrow is released to the seller.") if role == "buyer" else (
+                    f"The buyer has confirmed receipt of <b style='color:#fff;'>{skin}</b>. "
+                    f"<b style='color:#E4AE39;'>${price:.2f}</b> has been credited to your wallet.")
+            return _email_shell(f"""
+              <h2 style='color:#fff;margin:0 0 8px;font-size:20px;letter-spacing:-0.02em;'>{headline}</h2>
+              <p style='color:#B0B0B0;font-size:14px;margin:0 0 20px;'>{body}</p>
+              {img_html}
+              <a href='{FRONTEND_URL}/orders' style='display:inline-block;background:#E4AE39;color:#0A0A0A;
+                 font-weight:900;padding:12px 24px;text-decoration:none;border-radius:2px;
+                 letter-spacing:2px;font-size:12px;text-transform:uppercase;'>View orders</a>
+            """)
+
+        if _email_wants(buyer, "on_trade_verified"):
+            asyncio.create_task(send_transactional_email(buyer["email"],
+                f"Trade completed: {skin}", _trade_html("buyer")))
+        if _email_wants(seller, "on_trade_verified"):
+            asyncio.create_task(send_transactional_email(seller["email"],
+                f"Trade completed: ${price:.2f} released", _trade_html("seller")))
+    except Exception as e:
+        log.warning(f"trade-complete email failed: {e}")
     return {"ok": True}
 
 
@@ -1247,13 +1352,13 @@ DEFAULT_NOTIFICATION_PREFS = {
     "on_listing_sold": True,
     "on_new_listing_for_fav_skin": True,
     "on_offer_received": True,
+    "email_notifications": True,          # free for everyone
     "on_price_drop": False,               # premium
     "on_new_listing_in_category": False,  # premium
-    "email_notifications": False,         # premium
 }
 
 # Which notification prefs are gated behind a premium subscription
-PREMIUM_PREF_KEYS = {"on_price_drop", "on_new_listing_in_category", "email_notifications"}
+PREMIUM_PREF_KEYS = {"on_price_drop", "on_new_listing_in_category"}
 
 
 def _compute_badges(user: dict, stats: dict) -> list[dict]:
