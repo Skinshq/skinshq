@@ -16,6 +16,10 @@ User wants a marketplace to buy/sell CS2 skins where users login via Steam ID, s
 - Payment: Stripe Checkout Sessions (test mode)
 - Auth: Steam OpenID 2.0 + JWT tokens
 
+## Latest Changes (Feb 2026, this session)
+- Democratized "Email notifications" toggle in Member Panel → no longer premium-gated (all users can enable email alerts)
+- Fixed toggle knob overflow bug in Profile Visibility + Notifications tabs (knob was rendering 18px outside the pill track when ON — added explicit `left-0.5` + `p-0` to constrain positioning against browser default button padding)
+
 ## Implemented (Feb 2026)
 - Steam OpenID login flow (real, needs user's Steam API key optional for player summary)
 - CS2 inventory fetch from public Steam community endpoint + demo fallback

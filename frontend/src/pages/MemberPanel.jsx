@@ -142,8 +142,8 @@ function ProfileTab({ profile, stats, badges, onSaved }) {
               </div>
             </div>
             <button onClick={() => setIsPublic(!isPublic)} data-testid="profile-public-toggle"
-              className={`relative w-11 h-6 rounded-full transition-colors ${isPublic ? "bg-[#2ECC71]" : "bg-white/10"}`}>
-              <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform ${isPublic ? "translate-x-5" : "translate-x-0.5"}`} />
+              className={`relative w-11 h-6 rounded-full transition-colors p-0 ${isPublic ? "bg-[#2ECC71]" : "bg-white/10"}`}>
+              <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${isPublic ? "translate-x-5" : "translate-x-0"}`} />
             </button>
           </div>
         </div>
@@ -633,9 +633,9 @@ function NotifPrefsTab({ profile, onSaved }) {
     ["on_offer_received", "Offer received", "Someone sends an offer on one of your listings", false],
     ["on_item_purchased", "Item purchased", "Your purchase completed successfully", false],
     ["on_trade_verified", "Trade verified", "Trade escrow was released", false],
+    ["email_notifications", "Email notifications", "Also receive alerts by email", false],
     ["on_price_drop", "Price drop alert", "A favourite skin's price drops below your threshold", true],
     ["on_new_listing_in_category", "New listing in category", "New listing appears in a category you follow", true],
-    ["email_notifications", "Email notifications", "Also receive alerts by email", true],
   ];
 
   const isPremium = profile.is_premium;
@@ -658,8 +658,8 @@ function NotifPrefsTab({ profile, onSaved }) {
             </div>
             <button onClick={() => !disabled && toggle(k)} disabled={disabled}
               data-testid={`toggle-${k}`}
-              className={`relative w-11 h-6 rounded-full transition-colors ${on ? "bg-[#E4AE39]" : "bg-white/10"} ${disabled ? "cursor-not-allowed" : ""}`}>
-              <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform ${on ? "translate-x-5" : "translate-x-0.5"}`} />
+              className={`relative w-11 h-6 rounded-full transition-colors p-0 ${on ? "bg-[#E4AE39]" : "bg-white/10"} ${disabled ? "cursor-not-allowed" : ""}`}>
+              <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${on ? "translate-x-5" : "translate-x-0"}`} />
             </button>
           </div>
         );
