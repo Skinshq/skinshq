@@ -1,10 +1,17 @@
 """Steam OpenID 2.0 helpers."""
 import re
+import time
 import httpx
 from urllib.parse import urlencode
 
 STEAM_OPENID_URL = "https://steamcommunity.com/openid/login"
 STEAM_ID_REGEX = re.compile(r"https?://steamcommunity\.com/openid/id/(\d+)")
+
+# In-memory inventory cache: {steam_id: (fetched_at_epoch, items_list)}
+# Steam heavily rate-limits inventory requests from cloud IPs; caching for 10 min
+# means each user only triggers 1 real Steam call every 10 minutes.
+_INVENTORY_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_INVENTORY_TTL_SECONDS = 600  # 10 minutes
 
 
 def build_login_url(return_to: str, realm: str) -> str:
@@ -52,20 +59,50 @@ async def fetch_player_summary(steam_id: str, api_key: str) -> dict | None:
     return players[0] if players else None
 
 
-async def fetch_cs2_inventory(steam_id: str) -> list[dict]:
-    """Fetch CS2 (appid 730) inventory from Steam community endpoint. Public inventories only."""
+async def fetch_cs2_inventory(steam_id: str) -> tuple[list[dict], str]:
+    """Fetch CS2 (appid 730) inventory from Steam community endpoint.
+    Returns (items, reason). reason is one of: 'ok', 'cached', 'private', 'rate_limited', 'not_found', 'network_error'.
+    Empty items with reason='ok' means the account has no CS2 items.
+    Uses a 10-min per-steam_id cache since Steam heavily rate-limits cloud IPs."""
+    # Serve from cache first
+    cached = _INVENTORY_CACHE.get(steam_id)
+    if cached and (time.time() - cached[0]) < _INVENTORY_TTL_SECONDS:
+        return cached[1], "cached"
+
     url = f"https://steamcommunity.com/inventory/{steam_id}/730/2"
-    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-        resp = await client.get(url, params={"l": "english", "count": 200},
-                                headers={"User-Agent": "Mozilla/5.0"})
+    # Steam's inventory endpoint has a quirky bot filter on cloud IPs:
+    # a full Chrome UA gets 429'd, but a lightweight curl-like UA slips through.
+    headers = {
+        "User-Agent": "curl/8.0.1",
+        "Accept": "*/*",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers=headers) as client:
+            resp = await client.get(url, params={"l": "english", "count": 500})
+    except Exception:
+        return [], "network_error"
+
+    # Steam returns 401/403 for private, 429 for rate-limit, 500 sometimes for empty/no-CS2
+    if resp.status_code in (401, 403):
+        return [], "private"
+    if resp.status_code == 429:
+        return [], "rate_limited"
     if resp.status_code != 200:
-        return []
+        return [], "not_found"
+    # Some private/empty inventories return 200 with "null" body
+    if not resp.text or resp.text.strip().lower() in ("null", ""):
+        return [], "private"
     try:
         data = resp.json()
     except Exception:
-        return []
-    if not data or not data.get("assets"):
-        return []
+        return [], "network_error"
+    if not data:
+        return [], "private"
+    if data.get("success") == 0:
+        return [], "private"
+    if not data.get("assets"):
+        # 200 + success:1 + no assets = public but truly empty CS2 inventory
+        return [], "ok"
 
     desc_map = {}
     for d in data.get("descriptions", []):
@@ -110,7 +147,10 @@ async def fetch_cs2_inventory(steam_id: str) -> list[dict]:
             "image": img_url,
             "tradable": bool(d.get("tradable", 1)),
         })
-    return items
+    # Cache successful non-empty fetch so we don't hammer Steam on refresh
+    if items:
+        _INVENTORY_CACHE[steam_id] = (time.time(), items)
+    return items, "ok"
 
 
 def demo_inventory():

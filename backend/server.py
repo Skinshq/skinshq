@@ -461,12 +461,18 @@ async def steam_callback(request: Request):
         await db.users.insert_one(user.copy())
         user.pop("_id", None)
     else:
-        # Refresh display info + IP
+        # Refresh display info + IP + upgrade auth_method if needed
+        # (a user could have been auto-created via /auth/steamid before actually
+        #  completing OpenID; a successful OpenID must always upgrade them.)
         summary = await fetch_player_summary(steam_id, STEAM_API_KEY)
-        upd = {"last_seen_at": datetime.now(timezone.utc).isoformat()}
+        upd = {"last_seen_at": datetime.now(timezone.utc).isoformat(),
+               "auth_method": "steam_openid",
+               "is_verified": True}
         if summary:
             upd["display_name"] = summary.get("personaname", user["display_name"])
             upd["avatar"] = summary.get("avatarfull", user.get("avatar"))
+            if summary.get("profileurl"):
+                upd["profile_url"] = summary["profileurl"]
         add = {}
         if ip:
             upd["last_ip"] = ip
@@ -475,6 +481,9 @@ async def steam_callback(request: Request):
         if add:
             update_doc["$addToSet"] = add
         await db.users.update_one({"steam_id": steam_id}, update_doc)
+        # Reflect the upgrade in the in-memory copy so the JWT + downstream logic is consistent
+        user["auth_method"] = "steam_openid"
+        user["is_verified"] = True
 
     token = make_jwt(user["id"], steam_id)
     return RedirectResponse(url=f"{FRONTEND_URL}/auth/callback?token={token}")
@@ -715,13 +724,21 @@ async def me(user=Depends(get_current_user)):
 
 @api.get("/inventory/cs2")
 async def get_inventory(user=Depends(get_current_user)):
-    items = await fetch_cs2_inventory(user["steam_id"])
-    if not items:
-        # Fallback to demo inventory when Steam inventory is private
-        items = demo_inventory()
-        return {"items": items, "is_demo": True,
-                "message": "Your Steam CS2 inventory is private or empty. Showing demo items so you can preview the flow."}
-    return {"items": items, "is_demo": False}
+    items, reason = await fetch_cs2_inventory(user["steam_id"])
+    if items:
+        return {"items": items, "is_demo": False, "reason": reason}
+    # No items — either private, empty, rate-limited, or network error
+    messages = {
+        "private":       "Your Steam CS2 inventory is set to Private. Change it to Public in your Steam privacy settings to see your real items here.",
+        "rate_limited":  "Steam rate-limited our request. Try refreshing in a minute.",
+        "not_found":     "Steam couldn't find a CS2 inventory for this account.",
+        "network_error": "We couldn't reach Steam right now. Try again in a few seconds.",
+        "ok":            "Your Steam CS2 inventory is public but empty. Play a match to earn a drop, or preview the flow with the demo items below.",
+    }
+    log.info(f"[inventory] steam_id={user['steam_id']} empty result reason={reason}")
+    demo = demo_inventory()
+    return {"items": demo, "is_demo": True, "reason": reason,
+            "message": messages.get(reason, messages["private"])}
 
 
 @api.get("/skins/search")
