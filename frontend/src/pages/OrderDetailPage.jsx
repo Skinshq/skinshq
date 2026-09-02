@@ -12,7 +12,7 @@ import { useCurrency } from "../context/CurrencyContext";
 // State machine mirrored from /app/backend/order_states.py
 const STATE = {
   AWAITING_SELLER_TRADE: "AWAITING_SELLER_TRADE",
-  TRADE_OFFER_SENT: "TRADE_OFFER_SENT",
+  TRADE_OFFER_REPORTED: "TRADE_OFFER_REPORTED",
   AWAITING_BUYER_ACCEPTANCE: "AWAITING_BUYER_ACCEPTANCE",
   TRADE_VERIFICATION: "TRADE_VERIFICATION",
   VERIFICATION_PENDING: "VERIFICATION_PENDING",
@@ -23,6 +23,8 @@ const STATE = {
   DISPUTED: "DISPUTED",
   REFUND_PENDING: "REFUND_PENDING",
 };
+// Legacy alias — orders reserved before the rename still carry TRADE_OFFER_SENT.
+const isReportedState = (s) => s === STATE.TRADE_OFFER_REPORTED || s === "TRADE_OFFER_SENT";
 
 const FAILURE_STATES = new Set([
   STATE.CANCELLED, STATE.SELLER_TIMEOUT, STATE.MANUAL_REVIEW,
@@ -30,18 +32,18 @@ const FAILURE_STATES = new Set([
 ]);
 
 const BUYER_STEPS = [
-  { key: STATE.AWAITING_SELLER_TRADE,     label: "Payment reserved",           hint: "Waiting for seller to send trade" },
-  { key: STATE.TRADE_OFFER_SENT,          label: "Seller sent trade",          hint: "Check Steam & accept the offer" },
-  { key: STATE.AWAITING_BUYER_ACCEPTANCE, label: "Confirming acceptance",      hint: "Verifying with Steam" },
-  { key: STATE.TRADE_VERIFICATION,        label: "Verifying transfer",         hint: "Checking Steam inventory" },
-  { key: STATE.COMPLETED,                 label: "Trade completed",            hint: "Item locked by Steam for 7 days" },
+  { key: STATE.AWAITING_SELLER_TRADE,     label: "Payment confirmed",           hint: "Waiting for seller to send item" },
+  { key: STATE.TRADE_OFFER_REPORTED,      label: "Trade offer received",        hint: "Check Steam & accept the offer" },
+  { key: STATE.AWAITING_BUYER_ACCEPTANCE, label: "Confirming acceptance",       hint: "Verifying with Steam" },
+  { key: STATE.TRADE_VERIFICATION,        label: "Verifying transfer",          hint: "Checking Steam inventory" },
+  { key: STATE.COMPLETED,                 label: "Order completed",             hint: "Item locked by Steam for 7 days" },
 ];
 const SELLER_STEPS = [
-  { key: STATE.AWAITING_SELLER_TRADE,     label: "Item sold",                  hint: "Send Steam trade offer now" },
-  { key: STATE.TRADE_OFFER_SENT,          label: "Trade offer sent",           hint: "Waiting for buyer to accept" },
-  { key: STATE.AWAITING_BUYER_ACCEPTANCE, label: "Buyer accepting",            hint: "Steam is processing" },
-  { key: STATE.TRADE_VERIFICATION,        label: "Verifying transfer",         hint: "Backend confirming Steam movement" },
-  { key: STATE.COMPLETED,                 label: "Sale completed",             hint: "Wallet credited (in-app balance)" },
+  { key: STATE.AWAITING_SELLER_TRADE,     label: "Item sold",                   hint: "Send Steam trade offer now" },
+  { key: STATE.TRADE_OFFER_REPORTED,      label: "Trade offer sent (reported)", hint: "Waiting for buyer to accept in Steam" },
+  { key: STATE.AWAITING_BUYER_ACCEPTANCE, label: "Buyer accepting",             hint: "Steam is processing" },
+  { key: STATE.TRADE_VERIFICATION,        label: "Verifying transfer",          hint: "Backend confirming Steam movement" },
+  { key: STATE.COMPLETED,                 label: "Sale completed",              hint: "Wallet credited (in-app balance)" },
 ];
 
 function orderStepIndex(status, steps) {
@@ -74,7 +76,7 @@ export default function OrderDetailPage() {
   useEffect(() => {
     if (!order) return;
     const transient = new Set([
-      STATE.AWAITING_SELLER_TRADE, STATE.TRADE_OFFER_SENT,
+      STATE.AWAITING_SELLER_TRADE, STATE.TRADE_OFFER_REPORTED,
       STATE.AWAITING_BUYER_ACCEPTANCE, STATE.TRADE_VERIFICATION,
       STATE.VERIFICATION_PENDING,
     ]);
@@ -218,13 +220,13 @@ export default function OrderDetailPage() {
           {isSeller && order.status === STATE.AWAITING_SELLER_TRADE && (
             <SellerTradePanel order={order} onMarkSent={markTradeSent} busy={busy} />
           )}
-          {isSeller && order.status === STATE.TRADE_OFFER_SENT && (
-            <StatusCard tone="info" title="Trade offer sent ✓" desc="Waiting for the buyer to accept the offer in Steam. You'll get an email once verified." />
+          {isSeller && isReportedState(order.status) && (
+            <StatusCard tone="info" title="Trade offer sent — awaiting buyer" desc="You reported sending the trade. Waiting for the buyer to accept it in Steam. You'll be notified once inventory verification confirms transfer." />
           )}
           {isBuyer && order.status === STATE.AWAITING_SELLER_TRADE && (
             <BuyerWaitingSellerPanel order={order} onCancel={cancel} busy={busy} />
           )}
-          {isBuyer && order.status === STATE.TRADE_OFFER_SENT && (
+          {isBuyer && isReportedState(order.status) && (
             <BuyerAcceptPanel order={order} onConfirm={confirmReceived} onDispute={dispute} busy={busy} />
           )}
           {order.status === STATE.VERIFICATION_PENDING && (isBuyer || isSeller) && (
@@ -293,6 +295,13 @@ function SellerTradePanel({ order, onMarkSent, busy }) {
   const [copied, setCopied] = useState(false);
   const copyUrl = () => { navigator.clipboard.writeText(order.buyer_trade_url); setCopied(true); setTimeout(() => setCopied(false), 2000); };
   const deadline = order.seller_trade_deadline ? new Date(order.seller_trade_deadline) : null;
+  const buyerProfileUrl = order.buyer_steam_id ? `https://steamcommunity.com/profiles/${order.buyer_steam_id}` : null;
+  // steam:// deep-link opens the desktop Steam client directly to the New Trade Offer page.
+  const steamDesktopDeepLink = `steam://openurl/${order.buyer_trade_url}`;
+  const openSteamTrade = () => {
+    // Open in a new tab — Steam's own page handles the login and item selection.
+    window.open(order.buyer_trade_url, "_blank", "noopener,noreferrer");
+  };
   return (
     <div className="bg-[#E4AE39]/10 border border-[#E4AE39]/40 rounded-sm p-5 space-y-4" data-testid="seller-trade-panel">
       <div className="flex items-start gap-3">
@@ -300,47 +309,72 @@ function SellerTradePanel({ order, onMarkSent, busy }) {
         <div>
           <div className="text-sm font-bold text-[#E4AE39]">Send the Steam trade offer now</div>
           <div className="text-xs text-[#B0B0B0] mt-1">
-            Open the buyer's trade URL, add the exact item below, and send the offer.
+            Click the big button below. Steam's own trade page opens with the buyer already selected —
+            you just pick the exact item from your inventory and hit Send inside Steam.
             Deadline: <b className="text-[#E4AE39]">{deadline ? deadline.toLocaleString() : "24h"}</b>.
           </div>
         </div>
       </div>
 
-      <div>
-        <div className="text-[10px] uppercase tracking-widest text-[#8A8A8A] font-mono mb-1">Buyer's Steam Trade URL</div>
-        <div className="flex gap-2">
-          <a href={order.buyer_trade_url} target="_blank" rel="noreferrer"
-             data-testid="buyer-trade-url"
-             className="flex-1 bg-[#0A0A0A] border border-white/10 hover:border-[#E4AE39]/40 rounded-sm px-3 py-2 font-mono text-[11px] text-[#E0E0E0] truncate flex items-center gap-2">
-            {order.buyer_trade_url}
-            <ExternalLink className="w-3 h-3 flex-shrink-0 text-[#E4AE39]" />
-          </a>
-          <button onClick={copyUrl} data-testid="copy-trade-url"
-                  className="bg-[#0A0A0A] border border-white/10 hover:border-[#E4AE39]/40 rounded-sm px-3 text-xs uppercase tracking-widest">
-            {copied ? "✓" : <Copy className="w-3.5 h-3.5" />}
-          </button>
+      {/* Buyer identity block */}
+      <div className="bg-[#0A0A0A] border border-white/10 rounded-sm p-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <div className="text-[10px] uppercase tracking-widest text-[#8A8A8A] font-mono">Buyer</div>
+            <div className="text-sm font-medium mt-0.5">{order.buyer_name}</div>
+            <div className="text-[10px] font-mono text-[#555]">SteamID64: {order.buyer_steam_id}</div>
+          </div>
+          {buyerProfileUrl && (
+            <a href={buyerProfileUrl} target="_blank" rel="noreferrer"
+               className="text-[10px] uppercase tracking-widest text-[#E4AE39] hover:underline flex items-center gap-1">
+              Steam profile <ExternalLink className="w-3 h-3" />
+            </a>
+          )}
         </div>
       </div>
 
+      {/* Item to send */}
       <div>
         <div className="text-[10px] uppercase tracking-widest text-[#8A8A8A] font-mono mb-1">Exact item to send</div>
         <div className="bg-[#0A0A0A] border border-white/10 rounded-sm p-3 flex gap-3 items-center">
           {order.image && <img src={order.image} className="w-12 h-12 object-contain bg-black rounded-sm" alt="" />}
           <div className="flex-1 min-w-0">
             <div className="text-sm truncate">{order.market_hash_name}</div>
-            <div className="text-[10px] font-mono text-[#555] truncate">asset {order.asset_id}</div>
+            <div className="text-[10px] font-mono text-[#555] truncate">
+              asset {order.asset_id} · class {order.class_id}
+            </div>
           </div>
         </div>
       </div>
 
-      <button onClick={onMarkSent} disabled={busy}
-        data-testid="mark-trade-sent"
-        className="w-full bg-[#E4AE39] hover:bg-[#F5C75A] disabled:opacity-50 text-[#0A0A0A] font-bold px-6 py-3 rounded-sm text-xs uppercase tracking-widest">
-        {busy ? "Marking…" : "I sent the trade offer"}
+      {/* PRIMARY CTA — opens buyer's Steam trade URL in a new tab */}
+      <button onClick={openSteamTrade}
+        data-testid="open-steam-trade"
+        className="w-full bg-[#4B69FF] hover:bg-[#5B79FF] text-white font-bold px-6 py-4 rounded-sm text-sm uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-[#4B69FF]/20">
+        <ExternalLink className="w-4 h-4" />
+        Open Steam & Send Trade to {order.buyer_name}
       </button>
-      <div className="text-[10px] text-[#8A8A8A] leading-relaxed">
-        Reminder: SKIN.MRKT will <b>never</b> ask for your Steam password or Steam Guard code.
-        Send the offer through Steam yourself — we only track the outcome.
+      <div className="flex items-center justify-between text-[10px] font-mono text-[#8A8A8A]">
+        <a href={steamDesktopDeepLink} data-testid="open-steam-desktop"
+           className="hover:text-[#E4AE39]">Open in Steam desktop app →</a>
+        <button onClick={copyUrl} data-testid="copy-trade-url" className="hover:text-[#E4AE39] flex items-center gap-1">
+          {copied ? "✓ copied" : (<><Copy className="w-3 h-3" /> copy URL</>)}
+        </button>
+      </div>
+
+      {/* CONFIRM after sending — clearly separated + secondary style */}
+      <div className="pt-3 border-t border-[#E4AE39]/20">
+        <div className="text-[10px] uppercase tracking-widest text-[#8A8A8A] font-mono mb-2">After you clicked Send inside Steam</div>
+        <button onClick={onMarkSent} disabled={busy}
+          data-testid="mark-trade-sent"
+          className="w-full bg-[#E4AE39] hover:bg-[#F5C75A] disabled:opacity-50 text-[#0A0A0A] font-bold px-6 py-3 rounded-sm text-xs uppercase tracking-widest">
+          {busy ? "Marking…" : "I have sent the trade offer"}
+        </button>
+        <div className="text-[10px] text-[#8A8A8A] leading-relaxed mt-2">
+          This <b>only</b> updates the order status. It does not complete the sale — the backend
+          still verifies the item actually moved through Steam. SKIN.MRKT will <b>never</b> ask
+          for your Steam password or Guard code.
+        </div>
       </div>
     </div>
   );

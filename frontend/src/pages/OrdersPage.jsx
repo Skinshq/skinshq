@@ -110,7 +110,8 @@ function StatusBadge({ status, tradeStatus }) {
   // Support both the new P2P state machine and legacy Stripe orders (paid/pending).
   const NEW_STATE_LABELS = {
     AWAITING_SELLER_TRADE: { label: "Awaiting seller trade", color: "text-[#4B69FF]" },
-    TRADE_OFFER_SENT: { label: "Trade offer sent", color: "text-[#E4AE39]" },
+    TRADE_OFFER_REPORTED: { label: "Trade offer sent", color: "text-[#E4AE39]" },
+    TRADE_OFFER_SENT: { label: "Trade offer sent", color: "text-[#E4AE39]" }, // legacy alias
     AWAITING_BUYER_ACCEPTANCE: { label: "Awaiting acceptance", color: "text-[#E4AE39]" },
     TRADE_VERIFICATION: { label: "Verifying", color: "text-[#E4AE39]" },
     VERIFICATION_PENDING: { label: "Verification retrying", color: "text-[#EB4B4B]" },

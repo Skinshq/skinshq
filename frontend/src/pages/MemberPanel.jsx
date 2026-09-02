@@ -26,6 +26,44 @@ const TIER_STYLES = {
 };
 
 // =============== PROFILE TAB ===============
+const _TRADE_URL_RE = /^https?:\/\/(www\.)?steamcommunity\.com\/tradeoffer\/new\/\?partner=(\d+)&token=([A-Za-z0-9_-]+)$/;
+const STEAMID64_BASE = 76561197960265728n;
+
+function TradeUrlValidityHint({ tradeUrl, steamId }) {
+  const trimmed = (tradeUrl || "").trim();
+  if (!trimmed) {
+    return (
+      <div className="mt-2 text-[10px] font-mono text-[#8A8A8A]">
+        Not set — you won't be able to buy or sell until this is filled in.
+      </div>
+    );
+  }
+  const m = trimmed.match(_TRADE_URL_RE);
+  if (!m) {
+    return (
+      <div className="mt-2 text-[10px] font-mono text-[#EB4B4B]">
+        ✕ Format looks off. Expected: <span className="text-[#B0B0B0]">https://steamcommunity.com/tradeoffer/new/?partner=…&token=…</span>
+      </div>
+    );
+  }
+  try {
+    const partner = BigInt(m[2]);
+    const expected = BigInt(steamId) - STEAMID64_BASE;
+    if (partner !== expected) {
+      return (
+        <div className="mt-2 text-[10px] font-mono text-[#EB4B4B]">
+          ✕ This trade URL belongs to a different Steam account (partner {String(partner)}, your account = {String(expected)}). We won't save it.
+        </div>
+      );
+    }
+  } catch { /* ignore parse errors */ }
+  return (
+    <div className="mt-2 text-[10px] font-mono text-[#2ECC71]">
+      ✓ Matches your Steam account — you're good to trade.
+    </div>
+  );
+}
+
 function ProfileTab({ profile, stats, badges, onSaved }) {
   const [tradeUrl, setTradeUrl] = useState(profile.trade_url || "");
   const [bio, setBio] = useState(profile.bio || "");
@@ -153,10 +191,11 @@ function ProfileTab({ profile, stats, badges, onSaved }) {
             <Handshake className="w-4 h-4 text-[#E4AE39]" />
             <h3 className="font-display font-black text-lg tracking-tight">Steam Trade URL</h3>
           </div>
-          <p className="text-xs text-[#8A8A8A] mb-3">
-            Where buyers should send their trade offers.{" "}
+          <p className="text-xs text-[#8A8A8A] mb-3 leading-relaxed">
+            Where buyers send their trade offers. We check this belongs to <b className="text-[#E0E0E0]">your</b> Steam
+            account (<span className="font-mono">{profile.steam_id}</span>) — no one else can save a URL that isn't theirs.{" "}
             <a href="https://steamcommunity.com/id/me/tradeoffers/privacy" target="_blank" rel="noreferrer"
-              className="text-[#E4AE39] hover:underline">Find yours on Steam →</a>
+              className="text-[#E4AE39] hover:underline">Get yours on Steam →</a>
           </p>
           <input
             value={tradeUrl}
@@ -165,6 +204,7 @@ function ProfileTab({ profile, stats, badges, onSaved }) {
             placeholder="https://steamcommunity.com/tradeoffer/new/?partner=…&token=…"
             className="w-full bg-[#0A0A0A] border border-white/10 focus:border-[#E4AE39] rounded-sm px-3 py-2 text-sm outline-none font-mono"
           />
+          <TradeUrlValidityHint tradeUrl={tradeUrl} steamId={profile.steam_id} />
         </div>
 
         <div className="bg-[#121212] border border-white/10 rounded-sm p-5">

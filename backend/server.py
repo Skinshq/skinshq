@@ -1966,7 +1966,30 @@ async def _user_stats(user_id: str) -> dict:
 
 # --- Profile ---
 
-_TRADE_URL_RE = re.compile(r"^https?://(www\.)?steamcommunity\.com/tradeoffer/new/\?partner=\d+&token=[A-Za-z0-9_-]+$")
+_TRADE_URL_RE = re.compile(r"^https?://(www\.)?steamcommunity\.com/tradeoffer/new/\?partner=(\d+)&token=([A-Za-z0-9_-]+)$")
+_STEAMID64_BASE = 76561197960265728  # Steam AccountID → SteamID64 offset
+
+
+def _parse_trade_url_partner(url: str) -> Optional[int]:
+    """Return the numeric `partner` (Steam AccountID) from a trade URL, or None if invalid."""
+    m = _TRADE_URL_RE.match(url or "")
+    return int(m.group(2)) if m else None
+
+
+def _trade_url_matches_steam_id(url: str, steam_id64: str) -> bool:
+    """A Steam trade URL's `partner` is the AccountID = SteamID64 - 76561197960265728.
+    We use this to guarantee a user can only save a trade URL that belongs to
+    THEIR OWN Steam account — no impersonation, no scam listings."""
+    partner = _parse_trade_url_partner(url)
+    if partner is None:
+        return False
+    try:
+        expected = int(steam_id64) - _STEAMID64_BASE
+    except (TypeError, ValueError):
+        return False
+    return partner == expected
+
+
 _SOCIAL_KEYS = {"twitter", "discord", "instagram", "youtube", "twitch"}
 
 
@@ -2002,8 +2025,16 @@ async def update_profile(payload: ProfileUpdate, user=Depends(get_current_user))
     upd = {}
     if payload.trade_url is not None:
         tu = payload.trade_url.strip()
-        if tu and not _TRADE_URL_RE.match(tu):
-            raise HTTPException(400, "Trade URL must look like https://steamcommunity.com/tradeoffer/new/?partner=…&token=…")
+        if tu:
+            if not _TRADE_URL_RE.match(tu):
+                raise HTTPException(400, "Trade URL must look like https://steamcommunity.com/tradeoffer/new/?partner=…&token=…")
+            if not _trade_url_matches_steam_id(tu, user.get("steam_id", "")):
+                raise HTTPException(
+                    400,
+                    "This trade URL belongs to a different Steam account. "
+                    "Only your own trade URL can be saved. Get yours at "
+                    "https://steamcommunity.com/my/tradeoffers/privacy",
+                )
         upd["trade_url"] = tu or None
     if payload.bio is not None:
         upd["bio"] = payload.bio.strip()[:280] or None

@@ -14,6 +14,7 @@ import SkinDetailPage from "@/pages/SkinDetailPage";
 import InventoryPage from "@/pages/InventoryPage";
 import OrdersPage from "@/pages/OrdersPage";
 import OrderDetailPage from "@/pages/OrderDetailPage";
+import PendingSalesBanner from "@/components/PendingSalesBanner";
 import FavoritesPage from "@/pages/FavoritesPage";
 import AdminPage from "@/pages/AdminPage";
 import AdminLoginPage from "@/pages/AdminLoginPage";
@@ -32,6 +33,7 @@ function App() {
         <BrowserRouter>
           <div className="min-h-screen bg-[#0A0A0A] grain relative">
             <Navbar />
+            <PendingSalesBanner />
             <main className="relative z-10">
               <Routes>
                 <Route path="/" element={<LandingPage />} />

@@ -8,10 +8,14 @@ the buyer commit and the seller notification.
 
 # ---- Active states ----
 AWAITING_SELLER_TRADE       = "AWAITING_SELLER_TRADE"       # Buyer committed. Seller must send Steam offer.
-TRADE_OFFER_SENT            = "TRADE_OFFER_SENT"            # Seller marked "I sent the trade offer".
+TRADE_OFFER_REPORTED        = "TRADE_OFFER_REPORTED"        # Seller reported "I sent the trade offer" (unverified claim).
 AWAITING_BUYER_ACCEPTANCE   = "AWAITING_BUYER_ACCEPTANCE"   # Buyer must accept the offer in Steam.
 TRADE_VERIFICATION          = "TRADE_VERIFICATION"          # Backend is checking Steam inventories.
 COMPLETED                   = "COMPLETED"                   # Verified. Seller wallet credited. 7-day CS2 protection active.
+
+# Legacy alias — old orders in Mongo still carry TRADE_OFFER_SENT. Keep the constant
+# so any DB read/query that matched the old value doesn't silently break.
+TRADE_OFFER_SENT = TRADE_OFFER_REPORTED
 
 # ---- Failure / hold states ----
 CANCELLED           = "CANCELLED"           # Buyer cancelled before seller sent the trade.
@@ -23,12 +27,11 @@ REFUND_PENDING      = "REFUND_PENDING"      # Admin needs to issue refund (place
 
 # Allowed transitions: {from_state: set(to_states)}
 TRANSITIONS: dict[str, set[str]] = {
-    AWAITING_SELLER_TRADE: {TRADE_OFFER_SENT, CANCELLED, SELLER_TIMEOUT, DISPUTED},
-    TRADE_OFFER_SENT: {AWAITING_BUYER_ACCEPTANCE, DISPUTED, MANUAL_REVIEW},
+    AWAITING_SELLER_TRADE: {TRADE_OFFER_REPORTED, CANCELLED, SELLER_TIMEOUT, DISPUTED},
+    TRADE_OFFER_REPORTED: {AWAITING_BUYER_ACCEPTANCE, DISPUTED, MANUAL_REVIEW},
     AWAITING_BUYER_ACCEPTANCE: {TRADE_VERIFICATION, DISPUTED, MANUAL_REVIEW},
     TRADE_VERIFICATION: {COMPLETED, VERIFICATION_PENDING, MANUAL_REVIEW, DISPUTED},
     VERIFICATION_PENDING: {TRADE_VERIFICATION, MANUAL_REVIEW, DISPUTED},
-    # Terminal states — no further transitions allowed at runtime (admin overrides handled explicitly).
     COMPLETED: set(),
     CANCELLED: set(),
     SELLER_TIMEOUT: {REFUND_PENDING},
@@ -37,10 +40,9 @@ TRANSITIONS: dict[str, set[str]] = {
     REFUND_PENDING: set(),
 }
 
-# Human-friendly labels for the timeline UI (frontend also has its own copy).
 LABELS = {
-    AWAITING_SELLER_TRADE: "Waiting for seller to send trade offer",
-    TRADE_OFFER_SENT: "Trade offer sent — waiting for buyer",
+    AWAITING_SELLER_TRADE: "Payment confirmed — waiting for seller to send trade",
+    TRADE_OFFER_REPORTED: "Seller reported sending trade — buyer should check Steam",
     AWAITING_BUYER_ACCEPTANCE: "Waiting for buyer to accept in Steam",
     TRADE_VERIFICATION: "Verifying trade via Steam inventory",
     COMPLETED: "Trade completed",
