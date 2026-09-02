@@ -82,17 +82,12 @@ export default function InventoryPage() {
     }
     setListing(true);
     try {
-      const parts = (selected.market_name || "").split(" | ");
-      const weapon = parts[0] || "";
+      // Server-authoritative: we send only the identifier + price. The backend
+      // snapshots the real skin metadata directly from the seller's Steam inventory.
       await api.post("/marketplace/listings", {
-        skin_name: selected.market_name,
-        weapon,
-        type: guessType(weapon, selected.market_name),
-        rarity: selected.rarity || "consumer",
-        wear: selected.wear || null,
-        price_usd: p,
-        image: selected.image,
         asset_id: selected.asset_id,
+        price_usd: p,
+        currency: "USD",
       });
       toast.success("Listed on the marketplace");
       setSelected(null);
@@ -346,16 +341,6 @@ export default function InventoryPage() {
       </Dialog>
     </div>
   );
-}
-
-function guessType(weapon, full) {
-  const s = (full || "").toLowerCase();
-  if (s.includes("★") || /knife|karambit|bayonet|butterfly/i.test(weapon)) return "Knife";
-  if (/awp|ssg/i.test(weapon)) return "Sniper Rifle";
-  if (/ak-47|m4a4|m4a1|famas|galil|aug|sg 553/i.test(weapon)) return "Rifle";
-  if (/mp7|mp9|mac-10|p90|ump/i.test(weapon)) return "SMG";
-  if (/nova|xm1014|mag-7|sawed/i.test(weapon)) return "Shotgun";
-  return "Pistol";
 }
 
 function PurchasedCard({ order }) {

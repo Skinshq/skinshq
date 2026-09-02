@@ -117,24 +117,45 @@ async def fetch_cs2_inventory(steam_id: str) -> tuple[list[dict], str]:
         icon = d.get("icon_url")
         img_url = f"https://community.cloudflare.steamstatic.com/economy/image/{icon}/300x300" if icon else None
 
-        # Determine rarity from tags
+        # Determine rarity, wear, weapon type from tags
         rarity = "consumer"
-        tags = d.get("tags", [])
-        for t in tags:
-            if t.get("category") == "Rarity":
-                name = (t.get("localized_tag_name") or t.get("name") or "").lower()
+        wear = None
+        weapon_type = None  # e.g. Rifle / Pistol / Knife / Container
+        for t in d.get("tags", []):
+            cat = t.get("category")
+            name = (t.get("localized_tag_name") or t.get("name") or "").lower()
+            if cat == "Rarity":
                 if "consumer" in name: rarity = "consumer"
                 elif "industrial" in name: rarity = "industrial"
                 elif "mil-spec" in name or "milspec" in name: rarity = "milspec"
                 elif "restricted" in name: rarity = "restricted"
                 elif "classified" in name: rarity = "classified"
                 elif "covert" in name: rarity = "covert"
-                elif "extraordinary" in name or "contraband" in name or "★" in market_name: rarity = "contraband"
-
-        wear = None
-        for t in tags:
-            if t.get("category") == "Exterior":
+                elif "extraordinary" in name or "contraband" in name or "★" in market_name:
+                    rarity = "contraband"
+            elif cat == "Exterior":
                 wear = t.get("localized_tag_name") or t.get("name")
+            elif cat == "Type":
+                weapon_type = t.get("localized_tag_name") or t.get("name")
+
+        # Extract sticker names from item descriptions (Steam surfaces them as HTML)
+        stickers = []
+        for x in d.get("descriptions", []):
+            v = (x.get("value") or "").strip()
+            if v.lower().startswith("sticker:") or v.lower().startswith("stickers:"):
+                # e.g. "Sticker: Team Astralis | Antwerp 2022, iBUYPOWER | Katowice 2014"
+                names_part = v.split(":", 1)[1] if ":" in v else v
+                for s in names_part.split(","):
+                    s = s.strip()
+                    if s:
+                        stickers.append(s)
+
+        # Inspect link (needed later for CSFloat float/paint_seed lookups)
+        inspect_link = None
+        for act in d.get("actions") or []:
+            link = act.get("link") or ""
+            if "csgo_econ_action_preview" in link:
+                inspect_link = link
                 break
 
         items.append({
@@ -142,10 +163,17 @@ async def fetch_cs2_inventory(steam_id: str) -> tuple[list[dict], str]:
             "class_id": a.get("classid"),
             "instance_id": a.get("instanceid"),
             "market_name": market_name,
+            "market_hash_name": d.get("market_hash_name") or market_name,
+            "name": d.get("name") or market_name,
+            "weapon_type": weapon_type,
             "wear": wear,
             "rarity": rarity,
             "image": img_url,
+            "icon_url": icon,
             "tradable": bool(d.get("tradable", 1)),
+            "marketable": bool(d.get("marketable", 1)),
+            "stickers": stickers,
+            "inspect_link": inspect_link,
         })
     # Cache successful non-empty fetch so we don't hammer Steam on refresh
     if items:

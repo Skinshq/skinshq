@@ -137,15 +137,22 @@ async def get_current_user_optional(authorization: Optional[str] = Header(None))
 # ---------------- Models ----------------
 
 class ListingCreate(BaseModel):
-    skin_name: str
+    # Server-authoritative marketplace listings — client sends only what it can't fake:
+    # the asset_id it wants to list and its price. Every descriptive field
+    # (name, hash, image, wear, rarity, tradable, class/instance ids) is snapshotted
+    # server-side from the seller's live Steam CS2 inventory. Prevents item-substitution.
+    asset_id: str
+    price_usd: float
+    currency: Optional[str] = "USD"
+    # Legacy / catalog-listing fields — accepted but IGNORED for real Steam listings.
+    # Kept so seeded catalog listings and older clients don't break.
+    skin_name: Optional[str] = None
     weapon: Optional[str] = None
     type: Optional[str] = None
-    rarity: str
+    rarity: Optional[str] = None
     wear: Optional[str] = None
     float_value: Optional[float] = None
-    price_usd: float
     image: Optional[str] = None
-    asset_id: Optional[str] = None
 
 
 class FavoriteCreate(BaseModel):
@@ -341,6 +348,18 @@ async def seed_catalog():
         await db.market_prices.create_index("market_hash_name", unique=True)
     except Exception as e:
         log.warning(f"market_prices index warning: {e}")
+
+    # Listings: enforce "one active listing per (seller, asset)"
+    try:
+        await db.listings.create_index(
+            [("seller_id", 1), ("asset_id", 1)],
+            unique=True,
+            partialFilterExpression={"status": "active", "is_catalog": False},
+            name="uniq_active_seller_asset",
+        )
+        await db.listings.create_index([("status", 1), ("created_at", -1)])
+    except Exception as e:
+        log.warning(f"listings index warning: {e}")
 
     # Favorites: fast lookup by user + unique per (user, target)
     try:
@@ -948,22 +967,86 @@ async def get_listing(listing_id: str):
 
 @api.post("/marketplace/listings")
 async def create_listing(payload: ListingCreate, user=Depends(require_verified)):
+    """Server-authoritative listing creation.
+
+    The seller sends only { asset_id, price_usd, currency? }. We fetch the seller's
+    live CS2 inventory from Steam and snapshot the item ourselves — that way the
+    seller cannot list a skin they don't own, cannot substitute a different item
+    after the fact, and every listing carries authoritative Steam identifiers
+    (class_id, instance_id, market_hash_name, etc.).
+    """
+    if not payload.asset_id:
+        raise HTTPException(400, "asset_id is required")
+    if not payload.price_usd or payload.price_usd <= 0:
+        raise HTTPException(400, "price_usd must be > 0")
+
+    # Only Steam-OpenID accounts can list — SteamID64-manual login is read-only
+    if user.get("auth_method") != "steam_openid":
+        raise HTTPException(403, "You must sign in with Steam (OpenID) to list items")
+
+    # Prevent double-listing the same asset
+    dup = await db.listings.find_one(
+        {"seller_id": user["id"], "asset_id": payload.asset_id, "status": "active"},
+        {"_id": 0, "id": 1},
+    )
+    if dup:
+        raise HTTPException(409, "This item is already listed on the marketplace")
+
+    # Fetch seller's live Steam inventory and locate the exact asset
+    inv_items, reason = await fetch_cs2_inventory(user["steam_id"])
+    if not inv_items:
+        if reason == "private":
+            raise HTTPException(400, "Your Steam inventory is private. Set it to Public in Steam privacy settings, then try again.")
+        if reason == "rate_limited":
+            raise HTTPException(429, "Steam rate-limited us for a moment. Try again in ~1 minute.")
+        raise HTTPException(400, "Couldn't read your Steam inventory. Try again shortly.")
+
+    item = next((it for it in inv_items if str(it.get("asset_id")) == str(payload.asset_id)), None)
+    if not item:
+        raise HTTPException(404, "That item isn't in your CS2 inventory. Refresh and try again.")
+    if not item.get("tradable"):
+        raise HTTPException(400, "This item is not tradable on Steam yet (still on trade-hold).")
+
+    # Server-authoritative snapshot — client-supplied descriptive fields are IGNORED
+    market_hash_name = item.get("market_hash_name") or item.get("market_name")
+    # Best-effort weapon parsed from name (e.g. "AK-47" from "AK-47 | Redline")
+    weapon = ""
+    if market_hash_name and "|" in market_hash_name:
+        weapon = market_hash_name.split("|", 1)[0].strip()
+    elif market_hash_name:
+        weapon = market_hash_name.split(" (", 1)[0].strip()
+
     listing = {
         "id": str(uuid.uuid4()),
-        "skin_name": payload.skin_name,
-        "weapon": payload.weapon or "",
-        "type": payload.type or "",
-        "rarity": payload.rarity,
-        "wear": payload.wear,
-        "float_value": payload.float_value,
-        "price_usd": round(payload.price_usd, 2),
-        "image": payload.image,
-        "asset_id": payload.asset_id,
+        # Identity — authoritative Steam item fingerprint
+        "asset_id": str(item.get("asset_id")),
+        "class_id": str(item.get("class_id") or ""),
+        "instance_id": str(item.get("instance_id") or ""),
+        "market_hash_name": market_hash_name,
+        "skin_name": market_hash_name,      # legacy alias many UI screens rely on
+        "name": item.get("name") or market_hash_name,
+        "weapon": weapon,
+        "type": item.get("weapon_type") or "",
+        "rarity": item.get("rarity") or "consumer",
+        "wear": item.get("wear"),
+        "image": item.get("image"),
+        "icon_url": item.get("icon_url"),
+        "inspect_link": item.get("inspect_link"),
+        "stickers": item.get("stickers") or [],
+        # Float / paint_seed require a CS inspect-bot; store nulls for now.
+        "float_value": None,
+        "paint_seed": None,
+        # Commercial fields
+        "price_usd": round(float(payload.price_usd), 2),
+        "currency": (payload.currency or "USD").upper(),
+        # Seller identity (server-populated from JWT)
         "seller_id": user["id"],
         "seller_name": user["display_name"],
         "seller_steam_id": user["steam_id"],
+        # Lifecycle
         "status": "active",
         "is_catalog": False,
+        "tradable": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.listings.insert_one(listing.copy())
