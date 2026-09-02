@@ -28,6 +28,8 @@ from skinport_sync import (
     get_sync_state,
     start_scheduler as start_price_scheduler,
 )
+import order_states as OS
+from trade_verification import verify_trade, snapshot_seller_count, VERIFIED as TV_VERIFIED
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -937,7 +939,7 @@ async def list_listings(
     sort: str = "price_asc",
     limit: int = 60,
 ):
-    q = {"status": "active"}
+    q = {"status": "active", "is_catalog": {"$ne": True}}
     if rarity: q["rarity"] = rarity
     if weapon_type: q["type"] = weapon_type
     if wear: q["wear"] = wear
@@ -1322,9 +1324,426 @@ async def confirm_trade(order_id: str, user=Depends(get_current_user)):
 
 @api.get("/my/orders")
 async def my_orders(user=Depends(get_current_user)):
+    # Lazy timeout sweep — cheap enough to run inline on order-listing reads.
+    try:
+        await _sweep_seller_timeouts()
+    except Exception as e:
+        log.warning(f"timeout sweep failed: {e}")
     buys = await db.orders.find({"buyer_id": user["id"]}, {"_id": 0}).sort([("created_at", -1)]).to_list(200)
     sells = await db.orders.find({"seller_id": user["id"]}, {"_id": 0}).sort([("created_at", -1)]).to_list(200)
     return {"buys": buys, "sells": sells}
+
+
+# ==================== P2P Trade Flow (server-authoritative state machine) ====================
+# States are defined in /app/backend/order_states.py. Every transition writes an
+# append-only entry to order.state_history for the audit log.
+
+SELLER_TRADE_DEADLINE_HOURS = 24     # After buyer commits, seller must send offer within 24h.
+BUYER_ACCEPT_DEADLINE_HOURS = 48     # After seller marks offer sent, buyer has 48h to accept in Steam.
+TRADE_LOCK_DAYS_P2P = 7              # Steam's mandatory CS2 trade hold after a fresh trade.
+VERIFICATION_MAX_RETRIES = 6         # ~6 auto-retries at ~30s cadence = ~3 min total.
+
+
+async def _transition(order_id: str, from_state: str, to_state: str,
+                       *, actor_id: Optional[str] = None,
+                       actor_role: Optional[str] = None,
+                       reason: Optional[str] = None,
+                       extra: Optional[dict] = None) -> bool:
+    """Atomically move order from one state to another and append to state_history.
+    Returns True if the transition was applied (and only then)."""
+    if not OS.can_transition(from_state, to_state):
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    entry = {"from": from_state, "to": to_state, "at": now,
+             "actor_id": actor_id, "actor_role": actor_role, "reason": reason}
+    if extra:
+        entry["extra"] = extra
+    upd = {"$set": {"status": to_state, "updated_at": now},
+           "$push": {"state_history": entry}}
+    res = await db.orders.update_one({"id": order_id, "status": from_state}, upd)
+    return res.modified_count == 1
+
+
+class ReserveRequest(BaseModel):
+    listing_id: str
+
+
+@api.post("/orders/reserve")
+async def reserve_listing(payload: ReserveRequest, user=Depends(require_verified)):
+    """Buyer commits to a listing. Marks listing RESERVED, creates an order in
+    AWAITING_SELLER_TRADE, notifies the seller with the buyer's Steam trade URL.
+
+    Currently there's no real payment step — this is the demo flow. When Stripe
+    Connect lands, we'll insert PAYMENT_PENDING/PAYMENT_CONFIRMED between the
+    reserve action and this notification.
+    """
+    if user.get("auth_method") != "steam_openid":
+        raise HTTPException(403, "Sign in with Steam OpenID before purchasing.")
+    if not (user.get("trade_url") or "").startswith("https://steamcommunity.com/tradeoffer/new/"):
+        raise HTTPException(400, "Add your Steam Trade URL in your profile before purchasing.")
+
+    # Atomically flip the listing from active -> reserved
+    listing = await db.listings.find_one_and_update(
+        {"id": payload.listing_id, "status": "active"},
+        {"$set": {"status": "reserved",
+                  "reserved_by": user["id"],
+                  "reserved_at": datetime.now(timezone.utc).isoformat()}},
+        return_document=True,
+    )
+    if not listing:
+        raise HTTPException(409, "That listing is no longer available.")
+    if listing["seller_id"] == user["id"]:
+        # Restore listing status and bail
+        await db.listings.update_one({"id": listing["id"]}, {"$set": {"status": "active"},
+                                                              "$unset": {"reserved_by": "", "reserved_at": ""}})
+        raise HTTPException(400, "You can't buy your own listing.")
+
+    seller = await db.users.find_one({"id": listing["seller_id"]}, {"_id": 0})
+    if not seller:
+        # Extremely unlikely — orphan listing. Roll back.
+        await db.listings.update_one({"id": listing["id"]}, {"$set": {"status": "active"},
+                                                              "$unset": {"reserved_by": "", "reserved_at": ""}})
+        raise HTTPException(500, "Seller account not found.")
+
+    now = datetime.now(timezone.utc)
+    seller_deadline = (now + timedelta(hours=SELLER_TRADE_DEADLINE_HOURS)).isoformat()
+    order_id = str(uuid.uuid4())
+    order = {
+        "id": order_id,
+        "listing_id": listing["id"],
+        "listing_snapshot": {k: listing[k] for k in listing if k not in ("_id", "reserved_by", "reserved_at")},
+        # Trade identity fingerprints — captured at commit time, immutable
+        "asset_id": listing.get("asset_id"),
+        "class_id": listing.get("class_id"),
+        "instance_id": listing.get("instance_id"),
+        "market_hash_name": listing.get("market_hash_name") or listing.get("skin_name"),
+        "skin_name": listing.get("skin_name") or listing.get("market_hash_name"),
+        "image": listing.get("image"),
+        # Parties
+        "buyer_id": user["id"],
+        "buyer_name": user["display_name"],
+        "buyer_steam_id": user["steam_id"],
+        "buyer_trade_url": user["trade_url"],
+        "seller_id": seller["id"],
+        "seller_name": seller["display_name"],
+        "seller_steam_id": seller["steam_id"],
+        # Commercial
+        "price_usd": listing["price_usd"],
+        "amount_usd": listing["price_usd"],          # legacy alias
+        "currency": listing.get("currency", "USD"),
+        # Lifecycle
+        "status": OS.AWAITING_SELLER_TRADE,
+        "seller_trade_deadline": seller_deadline,
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+        "state_history": [{
+            "from": None, "to": OS.AWAITING_SELLER_TRADE,
+            "at": now.isoformat(),
+            "actor_id": user["id"], "actor_role": "buyer",
+            "reason": "Buyer committed to listing",
+        }],
+    }
+    await db.orders.insert_one(order.copy())
+    order.pop("_id", None)
+
+    # Notify seller in-app
+    try:
+        await db.notifications.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": seller["id"],
+            "type": "order_reserved",
+            "message": f"{user['display_name']} just bought your {order['skin_name']}. Send the Steam trade offer to complete the sale.",
+            "read": False,
+            "order_id": order_id,
+            "created_at": now.isoformat(),
+        })
+    except Exception as e:
+        log.warning(f"reserve notify failed: {e}")
+
+    # Email seller
+    try:
+        if _email_wants(seller, "on_listing_sold"):
+            html = _email_shell(f"""
+              <h2 style='color:#fff;margin:0 0 8px;font-size:20px;letter-spacing:-0.02em;'>Your {order['skin_name']} just sold</h2>
+              <p style='color:#B0B0B0;font-size:14px;margin:0 0 20px;'>
+                {user['display_name']} paid for the listing. You now have <b style='color:#E4AE39;'>{SELLER_TRADE_DEADLINE_HOURS}h</b>
+                to send the Steam trade offer through the buyer's trade URL.
+              </p>
+              <div style='background:#121212;border:1px solid #E4AE3940;border-radius:4px;padding:16px;margin:16px 0;'>
+                <div style='color:#8A8A8A;font-size:11px;text-transform:uppercase;letter-spacing:2px;'>Buyer's Steam trade URL</div>
+                <div style='font-family:monospace;font-size:12px;color:#E0E0E0;word-break:break-all;margin-top:8px;'>{user['trade_url']}</div>
+              </div>
+              <a href='{FRONTEND_URL}/order/{order_id}' style='display:inline-block;background:#E4AE39;color:#0A0A0A;
+                 font-weight:900;padding:12px 24px;text-decoration:none;border-radius:2px;
+                 letter-spacing:2px;font-size:12px;text-transform:uppercase;'>Open order to send trade</a>
+            """)
+            asyncio.create_task(send_transactional_email(seller["email"],
+                f"You sold {order['skin_name']} — send the Steam trade now", html))
+    except Exception as e:
+        log.warning(f"reserve email failed: {e}")
+
+    return order
+
+
+@api.get("/orders/{order_id}")
+async def get_order(order_id: str, user=Depends(get_current_user)):
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if user.get("id") not in (order.get("buyer_id"), order.get("seller_id")) and not user.get("is_admin"):
+        raise HTTPException(403, "Not your order")
+    return order
+
+
+@api.post("/orders/{order_id}/mark-trade-sent")
+async def mark_trade_sent(order_id: str, user=Depends(get_current_user)):
+    """Seller confirms they've sent the Steam trade offer. Captures a baseline
+    snapshot of how many matching items the seller currently has, so the
+    verifier can prove a decrement after the buyer accepts."""
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if order["seller_id"] != user["id"]:
+        raise HTTPException(403, "Only the seller can mark the trade as sent")
+    if order["status"] != OS.AWAITING_SELLER_TRADE:
+        raise HTTPException(400, f"Cannot mark sent from state {order['status']}")
+
+    baseline = await snapshot_seller_count(
+        seller_steam_id=order["seller_steam_id"],
+        class_id=str(order.get("class_id") or ""),
+        instance_id=str(order.get("instance_id") or "") or None,
+    )
+    now = datetime.now(timezone.utc)
+    buyer_deadline = (now + timedelta(hours=BUYER_ACCEPT_DEADLINE_HOURS)).isoformat()
+
+    ok = await _transition(order_id, OS.AWAITING_SELLER_TRADE, OS.TRADE_OFFER_SENT,
+                            actor_id=user["id"], actor_role="seller",
+                            reason="Seller confirmed Steam trade offer sent",
+                            extra={"seller_baseline_count": baseline, "buyer_deadline": buyer_deadline})
+    if not ok:
+        raise HTTPException(409, "State transition conflicted — refresh and try again")
+    await db.orders.update_one({"id": order_id},
+        {"$set": {"seller_baseline_count": baseline,
+                  "trade_offer_sent_at": now.isoformat(),
+                  "buyer_accept_deadline": buyer_deadline}})
+
+    # Notify buyer in-app
+    try:
+        await db.notifications.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": order["buyer_id"],
+            "type": "trade_offer_sent",
+            "message": f"{user['display_name']} sent the Steam trade for your {order['skin_name']}. Accept it in Steam.",
+            "read": False,
+            "order_id": order_id,
+            "created_at": now.isoformat(),
+        })
+    except Exception as e:
+        log.warning(f"trade-sent notify failed: {e}")
+
+    return {"ok": True, "seller_baseline_count": baseline, "buyer_accept_deadline": buyer_deadline}
+
+
+async def _run_verification(order_id: str, *, actor_id: Optional[str] = None) -> dict:
+    """Runs one verification pass. Writes audit entry. May transition to COMPLETED,
+    VERIFICATION_PENDING (retry later), or MANUAL_REVIEW (after retries exhausted).
+    Returns the resulting audit record for the caller."""
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        return {"error": "order_not_found"}
+    if order["status"] not in (OS.AWAITING_BUYER_ACCEPTANCE, OS.TRADE_VERIFICATION, OS.VERIFICATION_PENDING):
+        return {"error": "invalid_state", "state": order["status"]}
+
+    # Move into TRADE_VERIFICATION for the duration
+    if order["status"] != OS.TRADE_VERIFICATION:
+        await _transition(order_id, order["status"], OS.TRADE_VERIFICATION,
+                           actor_id=actor_id, actor_role="system",
+                           reason="Running Steam inventory verification")
+
+    audit = await verify_trade(
+        asset_id=str(order.get("asset_id")),
+        class_id=str(order.get("class_id") or "") or None,
+        instance_id=str(order.get("instance_id") or "") or None,
+        seller_steam_id=order["seller_steam_id"],
+        buyer_steam_id=order["buyer_steam_id"],
+        seller_baseline_count=order.get("seller_baseline_count"),
+    )
+    audit_entry = {**audit, "order_id": order_id,
+                   "listing_id": order.get("listing_id"),
+                   "seller_steam_id": order["seller_steam_id"],
+                   "buyer_steam_id": order["buyer_steam_id"],
+                   "expected_class_id": order.get("class_id"),
+                   "expected_instance_id": order.get("instance_id"),
+                   "expected_market_hash_name": order.get("market_hash_name"),
+                   "source": "steam_community_inventory"}
+    await db.trade_verification_audit.insert_one(audit_entry.copy())
+    audit_entry.pop("_id", None)
+
+    retries = int(order.get("verification_retries", 0)) + 1
+    await db.orders.update_one({"id": order_id}, {"$set": {"verification_retries": retries,
+                                                             "last_verification_audit": audit_entry}})
+
+    if audit.get("verified"):
+        # Move to COMPLETED. Credit seller wallet as our in-app "payout" (real Stripe Connect payout is a future step).
+        now = datetime.now(timezone.utc)
+        unlock_at = now + timedelta(days=TRADE_LOCK_DAYS_P2P)
+        await _transition(order_id, OS.TRADE_VERIFICATION, OS.COMPLETED,
+                           actor_role="system",
+                           reason="Steam inventory verification confirmed transfer",
+                           extra=audit_entry)
+        await db.orders.update_one({"id": order_id},
+            {"$set": {"completed_at": now.isoformat(),
+                      "trade_locked_until": unlock_at.isoformat(),
+                      "verification_source": "steam_community_inventory",
+                      "verified_at": now.isoformat()}})
+        # Credit seller wallet (in-app; NOT a real payout)
+        seller = await db.users.find_one({"id": order["seller_id"]})
+        credit = float(order.get("price_usd") or 0)
+        await db.users.update_one({"id": order["seller_id"]},
+            {"$inc": {"wallet_balance_usd": credit}})
+        await db.wallet_txns.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": order["seller_id"],
+            "amount_usd": credit,
+            "type": "sale_credit",
+            "order_id": order_id,
+            "note": f"Sale of {order['skin_name']} verified",
+            "created_at": now.isoformat(),
+        })
+        # Mark listing as sold + release the reservation
+        await db.listings.update_one({"id": order["listing_id"]},
+            {"$set": {"status": "sold"}, "$unset": {"reserved_by": "", "reserved_at": ""}})
+        # Emails
+        try:
+            buyer = await db.users.find_one({"id": order["buyer_id"]})
+            skin = order["skin_name"]
+            if _email_wants(buyer, "on_trade_verified"):
+                asyncio.create_task(send_transactional_email(buyer["email"],
+                    f"Trade verified: {skin} is yours",
+                    _email_shell(f"<h2 style='color:#fff;'>Trade verified</h2>"
+                                 f"<p style='color:#B0B0B0;'>The {skin} is confirmed in your Steam inventory. "
+                                 f"It'll be trade-locked by Steam for {TRADE_LOCK_DAYS_P2P} days.</p>"
+                                 f"<a href='{FRONTEND_URL}/order/{order_id}' style='color:#E4AE39;'>View order</a>")))
+            if _email_wants(seller, "on_trade_verified"):
+                asyncio.create_task(send_transactional_email(seller["email"],
+                    f"Sale verified — ${credit:.2f} credited",
+                    _email_shell(f"<h2 style='color:#fff;'>Sale complete</h2>"
+                                 f"<p style='color:#B0B0B0;'><b style='color:#E4AE39;'>${credit:.2f}</b> credited to your in-app wallet. "
+                                 f"(Real bank payout via Stripe Connect coming soon.)</p>"
+                                 f"<a href='{FRONTEND_URL}/order/{order_id}' style='color:#E4AE39;'>View order</a>")))
+        except Exception as e:
+            log.warning(f"complete email failed: {e}")
+        return audit_entry
+
+    # Not verified this pass — either retry or escalate to manual review.
+    if retries >= VERIFICATION_MAX_RETRIES:
+        await _transition(order_id, OS.TRADE_VERIFICATION, OS.MANUAL_REVIEW,
+                           actor_role="system",
+                           reason=f"Verification failed after {retries} attempts",
+                           extra=audit_entry)
+    else:
+        await _transition(order_id, OS.TRADE_VERIFICATION, OS.VERIFICATION_PENDING,
+                           actor_role="system",
+                           reason=f"Verification inconclusive; retry #{retries}",
+                           extra=audit_entry)
+    return audit_entry
+
+
+@api.post("/orders/{order_id}/confirm-received")
+async def confirm_received(order_id: str, user=Depends(get_current_user)):
+    """Buyer confirms they've accepted the Steam trade in-game. Kicks off verification."""
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if order["buyer_id"] != user["id"]:
+        raise HTTPException(403, "Only the buyer can confirm receipt")
+    if order["status"] not in (OS.TRADE_OFFER_SENT, OS.AWAITING_BUYER_ACCEPTANCE, OS.VERIFICATION_PENDING):
+        raise HTTPException(400, f"Cannot confirm from state {order['status']}")
+
+    if order["status"] == OS.TRADE_OFFER_SENT:
+        await _transition(order_id, OS.TRADE_OFFER_SENT, OS.AWAITING_BUYER_ACCEPTANCE,
+                           actor_id=user["id"], actor_role="buyer",
+                           reason="Buyer confirmed acceptance in Steam")
+
+    # Force-refresh inventories on first verification attempt (bypass cache)
+    audit = await _run_verification(order_id, actor_id=user["id"])
+    return audit
+
+
+@api.post("/orders/{order_id}/retry-verification")
+async def retry_verification(order_id: str, user=Depends(get_current_user)):
+    """Manual retry: buyer or admin can re-run verification while VERIFICATION_PENDING."""
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if user["id"] not in (order.get("buyer_id"), order.get("seller_id")) and not user.get("is_admin"):
+        raise HTTPException(403, "Not your order")
+    if order["status"] != OS.VERIFICATION_PENDING:
+        raise HTTPException(400, f"Cannot retry from state {order['status']}")
+    audit = await _run_verification(order_id, actor_id=user["id"])
+    return audit
+
+
+class CancelReq(BaseModel):
+    reason: Optional[str] = None
+
+
+@api.post("/orders/{order_id}/cancel")
+async def cancel_order(order_id: str, payload: CancelReq, user=Depends(get_current_user)):
+    """Buyer cancels the order — only allowed while AWAITING_SELLER_TRADE (before the seller has sent)."""
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if order["buyer_id"] != user["id"]:
+        raise HTTPException(403, "Only the buyer can cancel")
+    if order["status"] != OS.AWAITING_SELLER_TRADE:
+        raise HTTPException(400, "Cancel window has closed (seller already sent the trade).")
+    ok = await _transition(order_id, OS.AWAITING_SELLER_TRADE, OS.CANCELLED,
+                            actor_id=user["id"], actor_role="buyer",
+                            reason=payload.reason or "Buyer cancelled")
+    if not ok:
+        raise HTTPException(409, "State transition conflicted")
+    # Return listing to marketplace
+    await db.listings.update_one({"id": order["listing_id"]},
+        {"$set": {"status": "active"}, "$unset": {"reserved_by": "", "reserved_at": ""}})
+    return {"ok": True}
+
+
+@api.post("/orders/{order_id}/dispute")
+async def open_dispute(order_id: str, payload: CancelReq, user=Depends(get_current_user)):
+    """Either party opens a dispute — freezes the order for admin attention."""
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if user["id"] not in (order.get("buyer_id"), order.get("seller_id")):
+        raise HTTPException(403, "Not your order")
+    if order["status"] not in (OS.TRADE_OFFER_SENT, OS.AWAITING_BUYER_ACCEPTANCE,
+                                OS.TRADE_VERIFICATION, OS.VERIFICATION_PENDING,
+                                OS.MANUAL_REVIEW):
+        raise HTTPException(400, "Dispute cannot be opened from current state")
+    role = "buyer" if order["buyer_id"] == user["id"] else "seller"
+    ok = await _transition(order_id, order["status"], OS.DISPUTED,
+                            actor_id=user["id"], actor_role=role,
+                            reason=payload.reason or f"Dispute opened by {role}")
+    if not ok:
+        raise HTTPException(409, "State transition conflicted")
+    return {"ok": True}
+
+
+async def _sweep_seller_timeouts():
+    """Move any AWAITING_SELLER_TRADE orders past their deadline into SELLER_TIMEOUT
+    and return the listing to the marketplace. Called lazily from /my/orders and
+    /orders/{id}. Cheap enough to run inline; can move to a scheduler later."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    stale = db.orders.find({"status": OS.AWAITING_SELLER_TRADE,
+                             "seller_trade_deadline": {"$lt": now_iso}}, {"_id": 0})
+    async for o in stale:
+        applied = await _transition(o["id"], OS.AWAITING_SELLER_TRADE, OS.SELLER_TIMEOUT,
+                                     actor_role="system",
+                                     reason="Seller failed to send trade offer within deadline")
+        if applied:
+            await db.listings.update_one({"id": o["listing_id"]},
+                {"$set": {"status": "active"}, "$unset": {"reserved_by": "", "reserved_at": ""}})
 
 
 # ---------------- Favorites (liked items) ----------------

@@ -13,6 +13,7 @@ import LiveListingsPage from "@/pages/LiveListingsPage";
 import SkinDetailPage from "@/pages/SkinDetailPage";
 import InventoryPage from "@/pages/InventoryPage";
 import OrdersPage from "@/pages/OrdersPage";
+import OrderDetailPage from "@/pages/OrderDetailPage";
 import FavoritesPage from "@/pages/FavoritesPage";
 import AdminPage from "@/pages/AdminPage";
 import AdminLoginPage from "@/pages/AdminLoginPage";
@@ -39,6 +40,7 @@ function App() {
                 <Route path="/skin/:masterId" element={<SkinDetailPage />} />
                 <Route path="/inventory" element={<InventoryPage />} />
                 <Route path="/orders" element={<OrdersPage />} />
+                <Route path="/order/:orderId" element={<OrderDetailPage />} />
                 <Route path="/favorites" element={<FavoritesPage />} />
                 <Route path="/me" element={<MemberPanel />} />
                 <Route path="/support" element={<SupportPage />} />

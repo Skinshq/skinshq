@@ -51,10 +51,11 @@ export default function LiveListingsPage() {
     if (!user) { toast.error("Sign in with Steam first"); loginWithSteam(); return; }
     setBuying(l.id);
     try {
-      const { data } = await api.post(`/checkout/${l.id}`);
-      window.location.href = data.checkout_url;
+      const { data } = await api.post("/orders/reserve", { listing_id: l.id });
+      toast.success("Listing reserved — coordinating trade with seller");
+      window.location.href = `/order/${data.id}`;
     } catch (e) {
-      toast.error(e?.response?.data?.detail || "Checkout failed");
+      toast.error(e?.response?.data?.detail || "Reserve failed");
       setBuying(null);
     }
   };

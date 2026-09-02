@@ -78,7 +78,7 @@ export default function OrdersPage() {
                 <TradeLock lockUntil={o.trade_locked_until} status={o.status} />
               </div>
               <Link
-                to={`/checkout/success?order_id=${o.id}`}
+                to={`/order/${o.id}`}
                 data-testid={`view-order-${o.id}`}
                 className="text-xs uppercase tracking-widest bg-[#0A0A0A] border border-white/10 hover:border-[#E4AE39]/50 px-3 py-2 rounded-sm"
               >
@@ -107,6 +107,25 @@ function TabButton({ active, onClick, children, testid }) {
 }
 
 function StatusBadge({ status, tradeStatus }) {
+  // Support both the new P2P state machine and legacy Stripe orders (paid/pending).
+  const NEW_STATE_LABELS = {
+    AWAITING_SELLER_TRADE: { label: "Awaiting seller trade", color: "text-[#4B69FF]" },
+    TRADE_OFFER_SENT: { label: "Trade offer sent", color: "text-[#E4AE39]" },
+    AWAITING_BUYER_ACCEPTANCE: { label: "Awaiting acceptance", color: "text-[#E4AE39]" },
+    TRADE_VERIFICATION: { label: "Verifying", color: "text-[#E4AE39]" },
+    VERIFICATION_PENDING: { label: "Verification retrying", color: "text-[#EB4B4B]" },
+    COMPLETED: { label: "Completed", color: "text-[#2ECC71]" },
+    CANCELLED: { label: "Cancelled", color: "text-[#8A8A8A]" },
+    SELLER_TIMEOUT: { label: "Seller timeout", color: "text-[#EB4B4B]" },
+    MANUAL_REVIEW: { label: "Manual review", color: "text-[#EB4B4B]" },
+    DISPUTED: { label: "Disputed", color: "text-[#EB4B4B]" },
+    REFUND_PENDING: { label: "Refund pending", color: "text-[#EB4B4B]" },
+  };
+  if (NEW_STATE_LABELS[status]) {
+    const m = NEW_STATE_LABELS[status];
+    return <div className={`text-[10px] uppercase tracking-widest ${m.color} font-bold mt-1`}>{m.label}</div>;
+  }
+  // Legacy fallback
   const label = tradeStatus === "completed" ? "Completed"
     : status === "paid" ? "Paid"
     : status === "pending" ? "Pending payment"

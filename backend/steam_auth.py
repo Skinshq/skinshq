@@ -59,15 +59,17 @@ async def fetch_player_summary(steam_id: str, api_key: str) -> dict | None:
     return players[0] if players else None
 
 
-async def fetch_cs2_inventory(steam_id: str) -> tuple[list[dict], str]:
+async def fetch_cs2_inventory(steam_id: str, *, force_refresh: bool = False) -> tuple[list[dict], str]:
     """Fetch CS2 (appid 730) inventory from Steam community endpoint.
     Returns (items, reason). reason is one of: 'ok', 'cached', 'private', 'rate_limited', 'not_found', 'network_error'.
     Empty items with reason='ok' means the account has no CS2 items.
-    Uses a 10-min per-steam_id cache since Steam heavily rate-limits cloud IPs."""
-    # Serve from cache first
-    cached = _INVENTORY_CACHE.get(steam_id)
-    if cached and (time.time() - cached[0]) < _INVENTORY_TTL_SECONDS:
-        return cached[1], "cached"
+    Uses a 10-min per-steam_id cache since Steam heavily rate-limits cloud IPs.
+    Pass force_refresh=True to bypass the cache (used by trade verification)."""
+    # Serve from cache first (unless force_refresh)
+    if not force_refresh:
+        cached = _INVENTORY_CACHE.get(steam_id)
+        if cached and (time.time() - cached[0]) < _INVENTORY_TTL_SECONDS:
+            return cached[1], "cached"
 
     url = f"https://steamcommunity.com/inventory/{steam_id}/730/2"
     # Steam's inventory endpoint has a quirky bot filter on cloud IPs:

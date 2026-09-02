@@ -59,7 +59,7 @@ export default function InventoryPage() {
       setIsDemo(!!inv.data.is_demo);
       setMessage(inv.data.message || "");
       setMyListings(mine.data.items || []);
-      setPurchases((orders.data.buys || []).filter(o => o.status === "paid"));
+      setPurchases((orders.data.buys || []).filter(o => o.status === "paid" || o.status === "COMPLETED"));
     } catch (e) {
       toast.error("Failed to load inventory");
     } finally {
