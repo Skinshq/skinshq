@@ -1,0 +1,35 @@
+# /etc/systemd/system/skinmrkt-backend.service
+#
+# systemd unit to run the FastAPI backend on Ubuntu.
+# Enable with:
+#   sudo cp deploy/skinmrkt-backend.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now skinmrkt-backend
+#   sudo systemctl status skinmrkt-backend
+
+[Unit]
+Description=SKIN.MRKT FastAPI backend
+After=network.target mongod.service
+Wants=mongod.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/skinmrkt-backend
+EnvironmentFile=/var/www/skinmrkt-backend/.env
+ExecStart=/var/www/skinmrkt-backend/.venv/bin/uvicorn server:app --host 127.0.0.1 --port 8001 --workers 2
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/skinmrkt-backend.log
+StandardError=append:/var/log/skinmrkt-backend.err.log
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log
+
+[Install]
+WantedBy=multi-user.target

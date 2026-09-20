@@ -1,0 +1,43 @@
+# Netlify configuration for SKIN.MRKT frontend
+#
+# What Netlify does with this file:
+#   - `base` tells Netlify the repo subdirectory to enter before building
+#   - `command` runs the CRA production build
+#   - `publish` is the directory that gets deployed (relative to base)
+#   - `[[redirects]]` gives React Router the SPA fallback (any deep URL -> index.html)
+#
+# Before deploying, set REACT_APP_BACKEND_URL in the Netlify UI:
+#   Site settings -> Environment variables -> REACT_APP_BACKEND_URL = https://api.your-domain.com
+# (Create React App bakes REACT_APP_* into the JS bundle at build time.)
+
+[build]
+  base    = "frontend"
+  command = "yarn install --frozen-lockfile && yarn build"
+  publish = "build"
+
+[build.environment]
+  # Silence CRA CI-mode warnings-as-errors on Netlify builders
+  CI                     = "false"
+  NODE_VERSION           = "20"
+  GENERATE_SOURCEMAP     = "false"
+
+# SPA fallback — react-router deep links (e.g. /order/abc123) must resolve to index.html
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200
+
+# Long-cache the hashed static bundles
+[[headers]]
+  for = "/static/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# Security headers (safe defaults)
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options        = "SAMEORIGIN"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy        = "strict-origin-when-cross-origin"
+    Permissions-Policy     = "camera=(), microphone=(), geolocation=()"
