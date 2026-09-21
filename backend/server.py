@@ -15,10 +15,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime, timezone, timedelta
 import bcrypt
-from emergentintegrations.payments.stripe.checkout import (
-    StripeCheckout,
-    CheckoutSessionRequest,
-)
+import stripe
 
 from steam_auth import build_login_url, validate_openid, fetch_player_summary, fetch_cs2_inventory, demo_inventory
 from skins_catalog import build_seed_listings, fetch_skins_master, fetch_crates_master, RARITIES
@@ -37,6 +34,7 @@ load_dotenv(ROOT_DIR / ".env")
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 STRIPE_KEY = os.environ.get("STRIPE_API_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 STEAM_API_KEY = os.environ.get("STEAM_API_KEY", "")
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
@@ -47,7 +45,9 @@ BOOTSTRAP_ADMIN_PASSWORD = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "admin1234
 BOOTSTRAP_MOD_EMAIL = os.environ.get("BOOTSTRAP_MOD_EMAIL", "mod@skinmrkt.com")
 BOOTSTRAP_MOD_PASSWORD = os.environ.get("BOOTSTRAP_MOD_PASSWORD", "mod1234")
 
-# Stripe checkout is initialized per-request via StripeCheckout(api_key=STRIPE_KEY, webhook_url=...)
+# Official Stripe SDK — configure module-level API key once at import time.
+if STRIPE_KEY:
+    stripe.api_key = STRIPE_KEY
 
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
@@ -1124,28 +1124,44 @@ async def create_checkout(listing_id: str, request: Request, user=Depends(requir
 
     order_id = str(uuid.uuid4())
     origin = str(request.base_url).rstrip("/")
-    # If frontend and backend share the same host (Kubernetes ingress), use FRONTEND_URL
+    # If frontend and backend share the same host (reverse proxy), use FRONTEND_URL
     success_base = FRONTEND_URL or origin
-    webhook_url = f"{origin}/api/webhook/stripe"
 
-    checkout = StripeCheckout(api_key=STRIPE_KEY, webhook_url=webhook_url)
-    req = CheckoutSessionRequest(
-        amount=float(listing["price_usd"]),
-        currency="usd",
-        success_url=f"{success_base}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}&order_id={order_id}",
-        cancel_url=f"{success_base}/checkout/cancel?order_id={order_id}",
-        metadata={
-            "order_id": order_id,
-            "listing_id": listing_id,
-            "buyer_id": user["id"],
-            "seller_id": listing["seller_id"],
-        },
-    )
+    if not STRIPE_KEY:
+        raise HTTPException(500, "Stripe is not configured (STRIPE_API_KEY missing)")
+
     try:
-        session = await checkout.create_checkout_session(req)
+        # Stripe Python SDK is sync-first; wrap in a thread so we don't block the event loop.
+        session = await asyncio.to_thread(
+            stripe.checkout.Session.create,
+            mode="payment",
+            payment_method_types=["card"],
+            line_items=[{
+                "price_data": {
+                    "currency": "usd",
+                    "product_data": {"name": listing.get("skin_name") or listing.get("market_hash_name") or "CS2 skin"},
+                    "unit_amount": int(round(float(listing["price_usd"]) * 100)),  # cents
+                },
+                "quantity": 1,
+            }],
+            success_url=f"{success_base}/checkout/success?session_id={{CHECKOUT_SESSION_ID}}&order_id={order_id}",
+            cancel_url=f"{success_base}/checkout/cancel?order_id={order_id}",
+            metadata={
+                "order_id": order_id,
+                "listing_id": listing_id,
+                "buyer_id": user["id"],
+                "seller_id": listing["seller_id"],
+            },
+        )
+    except stripe.error.StripeError as e:
+        log.error(f"Stripe error: {e}")
+        raise HTTPException(500, f"Payment provider error: {getattr(e, 'user_message', None) or str(e)}")
     except Exception as e:
         log.error(f"Stripe error: {e}")
         raise HTTPException(500, f"Payment provider error: {e}")
+
+    session_id = session.id
+    checkout_url = session.url
 
     order = {
         "id": order_id,
@@ -1157,16 +1173,16 @@ async def create_checkout(listing_id: str, request: Request, user=Depends(requir
         "seller_name": listing["seller_name"],
         "amount_usd": listing["price_usd"],
         "currency": "usd",
-        "stripe_session_id": session.session_id,
+        "stripe_session_id": session_id,
         "status": "pending",
         "trade_status": "awaiting_payment",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.orders.insert_one(order.copy())
 
-    # Also record in payment_transactions per playbook
+    # Also record in payment_transactions for cross-reference
     await db.payment_transactions.insert_one({
-        "session_id": session.session_id,
+        "session_id": session_id,
         "order_id": order_id,
         "amount": float(listing["price_usd"]),
         "currency": "usd",
@@ -1177,7 +1193,7 @@ async def create_checkout(listing_id: str, request: Request, user=Depends(requir
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
 
-    return {"session_id": session.session_id, "checkout_url": session.url, "order_id": order_id}
+    return {"session_id": session_id, "checkout_url": checkout_url, "order_id": order_id}
 
 
 @api.get("/orders/{order_id}/status")
@@ -1189,12 +1205,11 @@ async def order_status(order_id: str, request: Request, user=Depends(get_current
         raise HTTPException(403, "Not your order")
 
     # Sync with Stripe if still pending
-    if order["status"] == "pending" and order.get("stripe_session_id"):
-        origin = str(request.base_url).rstrip("/")
-        webhook_url = f"{origin}/api/webhook/stripe"
-        checkout = StripeCheckout(api_key=STRIPE_KEY, webhook_url=webhook_url)
+    if order["status"] == "pending" and order.get("stripe_session_id") and STRIPE_KEY:
         try:
-            status_resp = await checkout.get_checkout_status(order["stripe_session_id"])
+            status_resp = await asyncio.to_thread(
+                stripe.checkout.Session.retrieve, order["stripe_session_id"]
+            )
             if status_resp.payment_status == "paid":
                 # Idempotent update
                 now = datetime.now(timezone.utc)
@@ -1231,43 +1246,57 @@ async def order_status(order_id: str, request: Request, user=Depends(get_current
 async def stripe_webhook(request: Request):
     body = await request.body()
     sig = request.headers.get("Stripe-Signature", "")
-    origin = str(request.base_url).rstrip("/")
-    checkout = StripeCheckout(api_key=STRIPE_KEY, webhook_url=f"{origin}/api/webhook/stripe")
+    if not STRIPE_WEBHOOK_SECRET:
+        # Signing secret is mandatory for authentic webhook processing.
+        log.error("Webhook received but STRIPE_WEBHOOK_SECRET is not configured")
+        return JSONResponse({"error": "webhook_not_configured"}, status_code=500)
     try:
-        event = await checkout.handle_webhook(body, sig)
+        event = stripe.Webhook.construct_event(body, sig, STRIPE_WEBHOOK_SECRET)
+    except stripe.error.SignatureVerificationError as e:
+        log.error(f"Webhook signature invalid: {e}")
+        return JSONResponse({"error": "invalid_signature"}, status_code=400)
     except Exception as e:
-        log.error(f"Webhook error: {e}")
+        log.error(f"Webhook parse error: {e}")
         return JSONResponse({"error": "invalid"}, status_code=400)
 
-    if event.payment_status == "paid" and event.session_id:
-        order_id = (event.metadata or {}).get("order_id")
-        if order_id:
-            now = datetime.now(timezone.utc)
-            unlock_at = now + timedelta(days=TRADE_LOCK_DAYS)
-            res = await db.orders.update_one(
-                {"id": order_id, "status": "pending"},
-                {"$set": {"status": "paid", "trade_status": "trade_sent",
-                          "paid_at": now.isoformat(),
-                          "trade_locked_until": unlock_at.isoformat()}}
-            )
-            if res.modified_count:
-                order = await db.orders.find_one({"id": order_id}, {"_id": 0})
-                if order:
-                    await db.listings.update_one(
-                        {"id": order["listing_id"]},
-                        {"$set": {"status": "sold"}}
-                    )
-                await db.payment_transactions.update_one(
-                    {"session_id": event.session_id},
-                    {"$set": {"payment_status": "paid", "status": "completed"}}
+    # We only care about successful checkout completions
+    if event.get("type") != "checkout.session.completed":
+        return {"ok": True, "ignored": event.get("type")}
+
+    session = event["data"]["object"]
+    if session.get("payment_status") != "paid":
+        return {"ok": True, "unpaid": True}
+
+    session_id = session.get("id")
+    metadata = session.get("metadata") or {}
+    order_id = metadata.get("order_id")
+    if order_id:
+        now = datetime.now(timezone.utc)
+        unlock_at = now + timedelta(days=TRADE_LOCK_DAYS)
+        res = await db.orders.update_one(
+            {"id": order_id, "status": "pending"},
+            {"$set": {"status": "paid", "trade_status": "trade_sent",
+                      "paid_at": now.isoformat(),
+                      "trade_locked_until": unlock_at.isoformat()}}
+        )
+        if res.modified_count:
+            order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+            if order:
+                await db.listings.update_one(
+                    {"id": order["listing_id"]},
+                    {"$set": {"status": "sold"}}
                 )
-                # Fan-out: notify anyone who favorited this listing
-                try:
-                    if order:
-                        await _notify_listing_sold(order.get("listing_snapshot") or {},
-                                                    buyer_id=order.get("buyer_id"))
-                except Exception as e:
-                    log.warning(f"sold-notify (webhook) failed: {e}")
+            await db.payment_transactions.update_one(
+                {"session_id": session_id},
+                {"$set": {"payment_status": "paid", "status": "completed"}}
+            )
+            # Fan-out: notify anyone who favorited this listing
+            try:
+                if order:
+                    await _notify_listing_sold(order.get("listing_snapshot") or {},
+                                                buyer_id=order.get("buyer_id"))
+            except Exception as e:
+                log.warning(f"sold-notify (webhook) failed: {e}")
     return {"ok": True}
 
 
