@@ -44,6 +44,24 @@ BOOTSTRAP_ADMIN_EMAIL = os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "admin@skinmrkt.
 BOOTSTRAP_ADMIN_PASSWORD = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "admin1234")
 BOOTSTRAP_MOD_EMAIL = os.environ.get("BOOTSTRAP_MOD_EMAIL", "mod@skinmrkt.com")
 BOOTSTRAP_MOD_PASSWORD = os.environ.get("BOOTSTRAP_MOD_PASSWORD", "mod1234")
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").lower()
+
+# ---- Fail-fast production guardrails ----
+# When ENVIRONMENT=production, insecure defaults (JWT_SECRET=dev-secret,
+# admin1234 / mod1234 passwords) are refused at import time so the process
+# never boots with trivially forgeable tokens.
+_INSECURE_DEFAULTS = {
+    "JWT_SECRET":                (JWT_SECRET, "dev-secret"),
+    "BOOTSTRAP_ADMIN_PASSWORD":  (BOOTSTRAP_ADMIN_PASSWORD, "admin1234"),
+    "BOOTSTRAP_MOD_PASSWORD":    (BOOTSTRAP_MOD_PASSWORD, "mod1234"),
+}
+if ENVIRONMENT == "production":
+    _bad = [k for k, (v, dflt) in _INSECURE_DEFAULTS.items() if v == dflt]
+    if _bad:
+        raise RuntimeError(
+            f"Refusing to start with insecure defaults for: {', '.join(_bad)}. "
+            "Set these to strong random values in your .env before running in production."
+        )
 
 # Official Stripe SDK — configure module-level API key once at import time.
 if STRIPE_KEY:
@@ -3003,10 +3021,20 @@ async def fx_rates():
 
 app.include_router(api)
 
+_cors_origins_raw = os.environ.get("CORS_ORIGINS", "*").strip()
+_cors_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
+# Browsers reject "Access-Control-Allow-Origin: *" combined with
+# "Access-Control-Allow-Credentials: true". Since we authenticate via
+# Authorization: Bearer headers (not cookies), it's safe to drop credentials
+# when origins is a wildcard.
+_cors_allow_credentials = not (len(_cors_origins) == 1 and _cors_origins[0] == "*")
+if ENVIRONMENT == "production" and _cors_origins == ["*"]:
+    log.warning("CORS_ORIGINS is '*' in production — set an explicit domain list in .env for safety")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_credentials=_cors_allow_credentials,
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
