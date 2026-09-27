@@ -1,0 +1,43 @@
+{
+  "summary": "Frontend-only testing of SKIN.MRKT Item Detail Popup (F1-F8). Verified popup open on tile click, all 4 tabs (Details/Buy Orders/Similar/Sales), Origin section (The Train Collection + multiple Souvenir Package entries), Seller card with public visibility, seller profile page navigation, buy-order inline form, and popup close via Escape/X/backdrop. Core flows all pass.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "ItemDetailPopup",
+        "issue": "Backdrop click in the top nav-header region (~top 60px) does NOT close the popup because the site header (LiveListings <Header/>) uses a fixed/sticky element that intercepts clicks even though popup is z-50. Result: user clicking near the top of the screen expecting to dismiss the modal has no effect. Clicks in any other backdrop region work correctly. Consider raising popup z-index above the header, or hiding/disabling header while modal is open.",
+        "selector": "[data-testid=item-detail-popup]",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "OPTIONAL: Raise ItemDetailPopup wrapper z-index (or apply pointer-events: none to sticky header while a modal is open) so backdrop clicks near the top of the screen also dismiss the popup. Not blocking — Escape and the X button both work as expected."
+  ],
+  "critical_code_review_comments": [
+    "ItemDetailPopup.jsx is 611 lines — approaching the 700-line split threshold. Consider extracting PriceTrend, FloatBar, and per-tab bodies (DetailsTab, BuyOrdersTab, SimilarTab) into their own files for maintainability.",
+    "In ItemDetailPopup.jsx line 165: `AbortController` is created but never passed as a `signal` to any of the api.get() calls, so aborting it has no effect. Either wire it through the axios request configs or drop the controller.",
+    "Test note: reference request claimed the PP-Bizon listing has NO inspect_link and popup-inspect button should be absent — during testing the button rendered (count=1). Not a bug in the popup logic (it correctly conditions on `inspect_link`), just means live data does include an inspect_link for this listing. Please confirm whether the expectation or the data was wrong."
+  ],
+  "updated_files": [],
+  "test_execution": {
+    "F1_open_popup": "PASS — popup opens on tile body click, all expected elements present (image, HeartButton, name 'PP-Bizon | Urban Dashed', quality chips FT + CONSUMER GRADE, Listed Price $12.00, popup-buy, Seller 'Player 331774' with 'VIEW STORE →')",
+    "F2_details_tab": "PASS — Price trend, Float value ('Requires CS2 inspect-bot'), Paint seed placeholder, Applied stickers ('No stickers applied.'), Origin section renders 'Train Collection' + 'Souvenir Package' entries",
+    "F3_tabs": "PASS — tab-details/buyorders/similar/sales all switch; Buy Orders shows empty state + place button; Similar shows wear dropdown + All/Normal/StatTrak/Souvenir toggles; Sales shows 'Phase 2' message",
+    "F4_buy_order_form": "PASS — form reveals with popup-buy-order-price + popup-buy-order-submit; clicking Create while unauthenticated triggers loginWithSteam() (redirect to steamcommunity.com/openid) as designed. Toast text not captured before redirect but redirect = expected 'sign in' behavior.",
+    "F5_seller_profile": "PASS — clicking VIEW STORE navigates to /seller/76561199090331774; seller-profile-page rendered with header (Player 331774, Verified badge, steam id, 1 Listing / 0 Sold) and active listings grid containing PP-Bizon card",
+    "F6_privacy_selector": "CODE-REVIEW ONLY (per request) — data-testids profile-visibility-public/anonymous/hidden confirmed to exist in MemberPanel.jsx",
+    "F7_close_popup": "PASS — Escape closes popup and restores body.overflow=''; X button (popup-close) closes; backdrop click on empty area closes correctly. Minor: click in top ~60px header area is intercepted by site nav.",
+    "F8_regression_buy_button": "PASS — clicking Buy button on tile does NOT open popup (stopPropagation working); triggers loginWithSteam() redirect while logged out"
+  },
+  "success_rate": {"backend": "not tested", "frontend": "100% of critical flows (F1-F5, F7, F8) pass; F6 code-review only"},
+  "test_credentials": "None used (all unauthenticated flows). Steam manual login available via POST /api/auth/steamid if E2E auth needed.",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Only 1 live listing exists (PP-Bizon Urban Dashed). Origin section renders both collections and crates arrays from /api/skins/detail-by-name. Popup properly cleans up body.overflow on unmount. If retesting, note that the reference expectation about popup-inspect being absent was wrong — the listing does have inspect_link. Header/nav intercepts clicks in top 60px preventing backdrop dismissal there.",
+  "rca of the issue": "Minor backdrop-close blind-spot RCA: Header component in the app layout is rendered outside the popup React tree and is likely fixed/sticky. Popup is `fixed inset-0 z-50` but the site header appears to render at same or higher z (or is stacked in a way that captures pointer events in its bounds). Fix: while popup is mounted, either (a) increase popup wrapper z-index to 100+, or (b) set `document.body.classList.add('modal-open')` and add CSS `.modal-open header { pointer-events: none }`."
+}

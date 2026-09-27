@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { X, ExternalLink, ShoppingBag, Layers, Package, Clock, Loader2, Lock, User } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
@@ -162,7 +163,6 @@ export default function ItemDetailPopup({ item, onClose, onBuy }) {
   const inspect = inspectHref(item);
 
   useEffect(() => {
-    const controller = new AbortController();
     setLoading(true);
     api
       .get("/skins/detail-by-name", { params: { market_hash_name: item.market_hash_name || item.skin_name } })
@@ -179,7 +179,6 @@ export default function ItemDetailPopup({ item, onClose, onBuy }) {
     document.addEventListener("keydown", onKey);
     document.body.style.overflow = "hidden";
     return () => {
-      controller.abort();
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = "";
     };
@@ -228,9 +227,9 @@ export default function ItemDetailPopup({ item, onClose, onBuy }) {
   const history = detail?.sales_history || {};
   const marketSnap = detail?.market_snapshot || {};
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center px-3 py-6 bg-black/80 backdrop-blur-sm overflow-y-auto"
+      className="fixed inset-0 z-[100] flex items-center justify-center px-3 py-6 bg-black/80 backdrop-blur-sm overflow-y-auto"
       onClick={onClose}
       data-testid="item-detail-popup"
     >
@@ -606,6 +605,7 @@ export default function ItemDetailPopup({ item, onClose, onBuy }) {
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
