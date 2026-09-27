@@ -68,14 +68,14 @@ function ProfileTab({ profile, stats, badges, onSaved }) {
   const [tradeUrl, setTradeUrl] = useState(profile.trade_url || "");
   const [bio, setBio] = useState(profile.bio || "");
   const [socials, setSocials] = useState(profile.socials || {});
-  const [isPublic, setIsPublic] = useState(profile.profile_public !== false);
+  const [visibility, setVisibility] = useState(profile.profile_visibility || (profile.profile_public !== false ? "public" : "anonymous"));
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
     setSaving(true);
     try {
       const { data } = await api.patch("/me/profile", {
-        trade_url: tradeUrl, bio, socials, profile_public: isPublic,
+        trade_url: tradeUrl, bio, socials, profile_visibility: visibility,
       });
       toast.success("Profile saved");
       onSaved?.(data.user);
@@ -168,21 +168,27 @@ function ProfileTab({ profile, stats, badges, onSaved }) {
             <User className="w-4 h-4 text-[#E4AE39]" />
             <h3 className="font-display font-black text-lg tracking-tight">Profile visibility</h3>
           </div>
-          <div className="flex items-center justify-between">
-            <div className="flex-1 pr-4">
-              <div className="text-sm font-medium">
-                {isPublic ? "Public profile" : "Private profile"}
-              </div>
-              <div className="text-[11px] text-[#8A8A8A] mt-0.5">
-                {isPublic
-                  ? "Other traders can view your display name, bio, badges, and socials on your public profile page."
-                  : "Your profile is hidden. Buyers can still see your seller name on listings, but they cannot view your bio, socials, or trader stats."}
-              </div>
-            </div>
-            <button onClick={() => setIsPublic(!isPublic)} data-testid="profile-public-toggle"
-              className={`relative w-11 h-6 rounded-full transition-colors p-0 ${isPublic ? "bg-[#2ECC71]" : "bg-white/10"}`}>
-              <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${isPublic ? "translate-x-5" : "translate-x-0"}`} />
-            </button>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            {[
+              { k: "public", label: "Public", hint: "Show my name, avatar, badges & socials on listings and the seller page." },
+              { k: "anonymous", label: "Anonymous", hint: "Hide my name and avatar. Listings show 'Anonymous Seller' with a lock icon." },
+              { k: "hidden", label: "Fully hidden", hint: "Same as anonymous, plus my seller page shows no identity — only my listings." },
+            ].map((opt) => (
+              <button
+                key={opt.k}
+                type="button"
+                onClick={() => setVisibility(opt.k)}
+                data-testid={`profile-visibility-${opt.k}`}
+                className={`text-left p-3 rounded-lg border transition-all ${
+                  visibility === opt.k
+                    ? "bg-[#E4AE39]/10 border-[#E4AE39]/60"
+                    : "bg-[#0A0A0A] border-white/10 hover:border-white/20"
+                }`}
+              >
+                <div className={`text-sm font-medium ${visibility === opt.k ? "text-[#E4AE39]" : "text-[#E0E0E0]"}`}>{opt.label}</div>
+                <div className="text-[10px] text-[#8A8A8A] mt-1 leading-snug">{opt.hint}</div>
+              </button>
+            ))}
           </div>
         </div>
 

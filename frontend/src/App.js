@@ -24,6 +24,7 @@ import ModeratorPage from "@/pages/ModeratorPage";
 import CheckoutSuccess from "@/pages/CheckoutSuccess";
 import CheckoutCancel from "@/pages/CheckoutCancel";
 import SteamCallback from "@/pages/SteamCallback";
+import SellerProfilePage from "@/pages/SellerProfilePage";
 
 function App() {
   return (
@@ -53,6 +54,7 @@ function App() {
                 <Route path="/auth/callback" element={<SteamCallback />} />
                 <Route path="/checkout/success" element={<CheckoutSuccess />} />
                 <Route path="/checkout/cancel" element={<CheckoutCancel />} />
+                <Route path="/seller/:steamId" element={<SellerProfilePage />} />
               </Routes>
             </main>
             <Toaster

@@ -190,6 +190,7 @@ class ProfileUpdate(BaseModel):
     bio: Optional[str] = None
     socials: Optional[dict] = None   # {twitter, discord, instagram, youtube, twitch}
     profile_public: Optional[bool] = None
+    profile_visibility: Optional[str] = None   # 'public' | 'anonymous' | 'hidden'
 
 
 class NotificationPrefs(BaseModel):
@@ -2075,6 +2076,7 @@ async def me_profile(user=Depends(get_current_user)):
         "bio": user.get("bio"),
         "socials": user.get("socials") or {},
         "profile_public": user.get("profile_public", True),
+        "profile_visibility": user.get("profile_visibility", "public" if user.get("profile_public", True) else "anonymous"),
         "notification_prefs": prefs,
         "wallet_balance_usd": round(float(user.get("wallet_balance_usd", 0.0)), 2),
     }
@@ -2109,6 +2111,13 @@ async def update_profile(payload: ProfileUpdate, user=Depends(get_current_user))
         upd["socials"] = clean
     if payload.profile_public is not None:
         upd["profile_public"] = bool(payload.profile_public)
+    if payload.profile_visibility is not None:
+        vis = payload.profile_visibility.lower().strip()
+        if vis not in ("public", "anonymous", "hidden"):
+            raise HTTPException(400, "profile_visibility must be 'public', 'anonymous', or 'hidden'")
+        upd["profile_visibility"] = vis
+        # Sync legacy boolean so old UI screens keep working
+        upd["profile_public"] = (vis == "public")
     if not upd:
         return {"ok": True, "updated": 0}
     await db.users.update_one({"id": user["id"]}, {"$set": upd})
@@ -2257,6 +2266,213 @@ async def cancel_buy_order(order_id: str, user=Depends(get_current_user)):
     if not res.deleted_count:
         raise HTTPException(404, "Buy order not found")
     return {"ok": True}
+
+
+# --- Public read: buy orders for a specific skin (used by ItemDetailPopup) ---
+@api.get("/buy-orders/for-skin")
+async def buy_orders_for_skin(market_hash_name: Optional[str] = None,
+                               skin_name: Optional[str] = None):
+    """Publicly readable open buy orders for a skin. Sorted by max price desc."""
+    q = {"status": "open"}
+    if market_hash_name:
+        # Base-name match (strip wear + StatTrak/Souvenir noise from the hash name)
+        base = _strip_name_noise(market_hash_name)
+        q["skin_name"] = base
+    elif skin_name:
+        q["skin_name"] = skin_name
+    else:
+        raise HTTPException(400, "market_hash_name or skin_name required")
+    docs = await db.buy_orders.find(q, {"_id": 0, "user_id": 0}) \
+        .sort([("max_price_usd", -1)]).limit(50).to_list(50)
+    # Respect buyer privacy — hide name if user chose anonymous/hidden
+    steam_ids = list({d.get("user_name") for d in docs if d.get("user_name")})
+    if steam_ids:
+        buyers = await db.users.find(
+            {"display_name": {"$in": steam_ids}},
+            {"_id": 0, "display_name": 1, "profile_visibility": 1, "profile_public": 1}
+        ).to_list(len(steam_ids))
+        priv = {b.get("display_name"): (b.get("profile_visibility")
+                                         or ("public" if b.get("profile_public", True) else "anonymous"))
+                for b in buyers}
+    else:
+        priv = {}
+    for d in docs:
+        if priv.get(d.get("user_name"), "public") != "public":
+            d["user_name"] = "Anonymous Buyer"
+    return {"items": docs, "count": len(docs)}
+
+
+def _strip_name_noise(name: str) -> str:
+    """Strip StatTrak™ / Souvenir / ★ prefixes and (Wear) suffix — leaves the
+    canonical base skin name that skins_master indexes on."""
+    if not name:
+        return ""
+    n = name
+    for pfx in ("StatTrak™ ", "Souvenir ", "★ ", "★"):
+        if n.startswith(pfx):
+            n = n[len(pfx):]
+    for w in (" (Factory New)", " (Minimal Wear)", " (Field-Tested)",
+              " (Well-Worn)", " (Battle-Scarred)"):
+        if n.endswith(w):
+            n = n[:-len(w)]
+    return n.strip()
+
+
+# --- Skin detail (master + origin + Skinport price history) ---
+@api.get("/skins/detail-by-name")
+async def skin_detail_by_name(market_hash_name: str):
+    """Returns everything the ItemDetailPopup needs for a specific market_hash_name:
+      - master metadata (rarity, image, float bounds, collections, crates)
+      - Skinport price snapshot (min/median/mean/max)
+      - Skinport sales history (24h/7d/30d/90d aggregates)
+      - our own listing count for that base skin
+    """
+    base = _strip_name_noise(market_hash_name)
+    master = await db.skins_master.find_one({"name": base}, {"_id": 0})
+    snap = await db.market_prices.find_one({"market_hash_name": market_hash_name},
+                                             {"_id": 0}) or \
+           await db.market_prices.find_one({"market_hash_name": base}, {"_id": 0})
+
+    # Skinport sales history — non-blocking best-effort; failure returns empty
+    history = None
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
+            r = await c.get(
+                "https://api.skinport.com/v1/sales/history",
+                params={"app_id": 730, "currency": "USD",
+                         "market_hash_name": market_hash_name},
+                headers={"Accept-Encoding": "br, gzip",
+                          "User-Agent": "Mozilla/5.0 (SkinMrkt/1.0)"},
+            )
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list) and data:
+                    history = data[0]
+    except Exception as e:
+        log.warning(f"skinport history fetch failed: {e}")
+
+    live_count = await db.listings.count_documents({
+        "market_hash_name": {"$regex": f"^{_re_escape(base)}"},
+        "status": "active",
+        "is_catalog": False,
+    })
+
+    return {
+        "market_hash_name": market_hash_name,
+        "base_name": base,
+        "master": master or {},
+        "market_snapshot": snap or {},
+        "sales_history": history or {},
+        "live_listings_count": live_count,
+    }
+
+
+def _re_escape(s: str) -> str:
+    import re
+    return re.escape(s or "")
+
+
+# --- Similar listings (same base skin, filterable) ---
+@api.get("/marketplace/similar")
+async def marketplace_similar(base_name: str,
+                               wear: Optional[str] = None,
+                               stattrak: Optional[bool] = None,
+                               souvenir: Optional[bool] = None,
+                               limit: int = 24):
+    """Listings on OUR marketplace for the same base skin. Optional filters:
+    wear (Factory New/…), stattrak, souvenir."""
+    q = {
+        "status": "active",
+        "is_catalog": False,
+        "market_hash_name": {"$regex": f"^{_re_escape(base_name)}"},
+    }
+    if wear:
+        q["wear"] = wear
+    docs = await db.listings.find(q, {"_id": 0}).sort([("price_usd", 1)]).limit(int(limit) or 24).to_list(limit)
+    # Client-side flags — filter by StatTrak/Souvenir presence in the hash name
+    def _flag(d):
+        n = (d.get("market_hash_name") or "")
+        d["is_stattrak"] = "StatTrak" in n
+        d["is_souvenir"] = "Souvenir" in n
+        return d
+    docs = [_flag(d) for d in docs]
+    if stattrak is not None:
+        docs = [d for d in docs if d["is_stattrak"] == bool(stattrak)]
+    if souvenir is not None:
+        docs = [d for d in docs if d["is_souvenir"] == bool(souvenir)]
+    return {"items": docs, "count": len(docs)}
+
+
+# --- Public seller profile ---
+def _public_user_view(user: dict) -> dict:
+    """Return a redacted user document that respects profile_visibility."""
+    vis = (user.get("profile_visibility")
+           or ("public" if user.get("profile_public", True) else "anonymous"))
+    steam_id = user.get("steam_id")
+    if vis == "public":
+        return {
+            "steam_id": steam_id,
+            "display_name": user.get("display_name"),
+            "avatar": user.get("avatar"),
+            "profile_url": user.get("profile_url"),
+            "bio": user.get("bio"),
+            "socials": user.get("socials") or {},
+            "is_verified": user.get("is_verified", False),
+            "profile_visibility": "public",
+            "created_at": user.get("created_at"),
+        }
+    # anonymous OR hidden — strip PII
+    return {
+        "steam_id": steam_id,
+        "display_name": "Anonymous Seller",
+        "avatar": None,
+        "profile_url": None,
+        "bio": None,
+        "socials": {},
+        "is_verified": False,
+        "profile_visibility": vis,
+        "created_at": None,
+    }
+
+
+@api.get("/users/{steam_id}/public")
+async def public_user_profile(steam_id: str):
+    u = await db.users.find_one({"steam_id": steam_id}, {"_id": 0})
+    if not u:
+        raise HTTPException(404, "User not found")
+    return _public_user_view(u)
+
+
+@api.get("/users/{steam_id}/listings")
+async def public_user_listings(steam_id: str):
+    """Public list of a seller's active + completed listings, minus PII if
+    the seller's profile is anonymous/hidden."""
+    u = await db.users.find_one({"steam_id": steam_id}, {"_id": 0})
+    if not u:
+        raise HTTPException(404, "User not found")
+    view = _public_user_view(u)
+    # Active listings
+    active = await db.listings.find(
+        {"seller_id": u["id"], "status": "active", "is_catalog": False},
+        {"_id": 0},
+    ).sort([("created_at", -1)]).limit(60).to_list(60)
+    # Completed sales — count only
+    sold_count = await db.orders.count_documents({
+        "listing_snapshot.seller_id": u["id"],
+        "state": "COMPLETED",
+    })
+    # Strip seller PII from listings if not public
+    if view["profile_visibility"] != "public":
+        for lst in active:
+            lst["seller_name"] = "Anonymous Seller"
+            lst.pop("seller_steam_id", None)
+    return {
+        "user": view,
+        "active_listings": active,
+        "active_count": len(active),
+        "sold_count": sold_count,
+    }
+
 
 
 async def _notify_matching_buy_orders(listing: dict):

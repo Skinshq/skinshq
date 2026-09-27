@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { ExternalLink, X, Sparkles } from "lucide-react";
 import { useCurrency } from "../context/CurrencyContext";
+import ItemDetailPopup from "./ItemDetailPopup";
 
 /**
  * Detect quality flags from market_hash_name.
@@ -85,12 +86,14 @@ export default function SkinCard({ item, onClick, actionLabel = "Buy Now", testi
   const inspect = inspectHref(item);
   const stickers = item.stickers || [];
   const [popupSticker, setPopupSticker] = useState(null);
+  const [showDetail, setShowDetail] = useState(false);
 
   return (
     <>
       <div
-        className={`skin-card group relative bg-[#121212] rounded-xl overflow-hidden rarity-border-${rarity} flex flex-col`}
+        className={`skin-card group relative bg-[#121212] rounded-xl overflow-hidden rarity-border-${rarity} flex flex-col cursor-pointer`}
         data-testid={testid || `skin-card-${item.id || item.asset_id}`}
+        onClick={() => setShowDetail(true)}
       >
         {/* Image + rarity glow */}
         <div className="relative aspect-[4/3] bg-gradient-to-br from-[#0A0A0A] via-[#121212] to-[#050505] overflow-hidden">
@@ -202,7 +205,7 @@ export default function SkinCard({ item, onClick, actionLabel = "Buy Now", testi
           {/* Buy button — its own dedicated line */}
           {onClick && (
             <button
-              onClick={onClick}
+              onClick={(e) => { e.stopPropagation(); onClick(e); }}
               disabled={disabled}
               data-testid={`action-${item.id || item.asset_id}`}
               className="w-full text-[11px] font-bold uppercase tracking-widest bg-[#E4AE39] hover:bg-[#F5C75A] disabled:opacity-40 disabled:cursor-not-allowed text-[#0A0A0A] px-3 py-2 rounded-lg transition-colors mt-1"
@@ -215,6 +218,13 @@ export default function SkinCard({ item, onClick, actionLabel = "Buy Now", testi
 
       {popupSticker && (
         <StickerPopup sticker={popupSticker} onClose={() => setPopupSticker(null)} />
+      )}
+      {showDetail && (
+        <ItemDetailPopup
+          item={item}
+          onClose={() => setShowDetail(false)}
+          onBuy={onClick ? (i) => { setShowDetail(false); onClick(i); } : null}
+        />
       )}
     </>
   );

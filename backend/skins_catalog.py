@@ -105,6 +105,15 @@ async def fetch_skins_master() -> list[dict]:
             "image": image,
             "min_float": s.get("min_float"),
             "max_float": s.get("max_float"),
+            # Origin — a skin can drop from multiple crates or belong to multiple collections
+            "collections": [
+                {"id": c.get("id"), "name": c.get("name"), "image": c.get("image")}
+                for c in (s.get("collections") or []) if c.get("name")
+            ],
+            "crates": [
+                {"id": c.get("id"), "name": c.get("name"), "image": c.get("image")}
+                for c in (s.get("crates") or []) if c.get("name")
+            ],
         })
     return catalog
 
