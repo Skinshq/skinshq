@@ -1,0 +1,16 @@
+# SKIN.MRKT SPA fallback — copied to build/ by CRA on `yarn build`.
+# Deployed at /var/www/skinmrkt/.htaccess.  Any URL that isn't a real file or
+# directory falls back to index.html so React Router handles routing client-side.
+# Note: /api/* is reverse-proxied to Uvicorn by the main Apache vhost BEFORE
+# .htaccess runs, so this rewrite never touches API traffic.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    RewriteBase /
+
+    RewriteRule ^index\.html$ - [L]
+
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule . /index.html [L]
+</IfModule>
