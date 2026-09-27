@@ -178,13 +178,41 @@ h6,
         rgba(10, 10, 10, 0) 75%);
 }
 
-/* Skin card hover glow */
+/* Skin card hover glow — CS2 case-opening style illumination */
 .skin-card {
-    transition: transform 0.2s ease-out, background 0.2s ease-out;
+    transition: transform 0.25s ease-out, box-shadow 0.3s ease-out, border-color 0.3s ease-out;
+    border: 1px solid rgba(255, 255, 255, 0.04);
 }
 .skin-card:hover {
-    transform: translateY(-3px);
-    background: var(--surface-hover) !important;
+    transform: translateY(-4px);
+    border-color: rgba(228, 174, 57, 0.35);
+    box-shadow: 0 12px 40px -8px rgba(0, 0, 0, 0.8),
+                0 0 24px -4px rgba(228, 174, 57, 0.15);
+}
+.skin-card.rarity-border-covert:hover {
+    box-shadow: 0 12px 40px -8px rgba(0, 0, 0, 0.8),
+                0 0 32px -4px rgba(235, 75, 75, 0.35);
+    border-color: rgba(235, 75, 75, 0.5);
+}
+.skin-card.rarity-border-classified:hover {
+    box-shadow: 0 12px 40px -8px rgba(0, 0, 0, 0.8),
+                0 0 32px -4px rgba(211, 44, 230, 0.35);
+    border-color: rgba(211, 44, 230, 0.5);
+}
+.skin-card.rarity-border-restricted:hover {
+    box-shadow: 0 12px 40px -8px rgba(0, 0, 0, 0.8),
+                0 0 32px -4px rgba(136, 71, 255, 0.35);
+    border-color: rgba(136, 71, 255, 0.5);
+}
+.skin-card.rarity-border-milspec:hover {
+    box-shadow: 0 12px 40px -8px rgba(0, 0, 0, 0.8),
+                0 0 32px -4px rgba(75, 105, 255, 0.35);
+    border-color: rgba(75, 105, 255, 0.5);
+}
+.skin-card.rarity-border-contraband:hover {
+    box-shadow: 0 12px 40px -8px rgba(0, 0, 0, 0.8),
+                0 0 40px -4px rgba(228, 174, 57, 0.55);
+    border-color: rgba(228, 174, 57, 0.7);
 }
 
 /* Selection */

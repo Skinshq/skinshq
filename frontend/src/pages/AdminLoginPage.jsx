@@ -53,16 +53,16 @@ export default function AdminLoginPage() {
         <form onSubmit={onSubmit} className="bg-[#121212] border border-white/10 rounded-sm p-6 space-y-4">
           <div>
             <label className="text-[10px] uppercase tracking-widest text-[#555] font-mono mb-1.5 block">
-              Email
+              Username or Email
             </label>
             <div className="flex items-center gap-2 bg-[#0A0A0A] border border-white/10 focus-within:border-[#E4AE39] rounded-sm px-3 py-2.5 transition-colors">
               <Mail className="w-4 h-4 text-[#555]" />
               <input
-                type="email"
+                type="text"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 data-testid="admin-email"
-                placeholder="admin@yourdomain.com"
+                placeholder="e.g. Bituop or admin@yourdomain.com"
                 autoComplete="username"
                 autoFocus
                 className="bg-transparent outline-none flex-1 text-sm placeholder:text-[#555]"

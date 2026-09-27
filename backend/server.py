@@ -40,10 +40,10 @@ JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 PRICE_SYNC_ENABLED = os.environ.get("PRICE_SYNC_ENABLED", "1") == "1"
-BOOTSTRAP_ADMIN_EMAIL = os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "admin@skinmrkt.com")
-BOOTSTRAP_ADMIN_PASSWORD = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "admin1234")
-BOOTSTRAP_MOD_EMAIL = os.environ.get("BOOTSTRAP_MOD_EMAIL", "mod@skinmrkt.com")
-BOOTSTRAP_MOD_PASSWORD = os.environ.get("BOOTSTRAP_MOD_PASSWORD", "mod1234")
+BOOTSTRAP_ADMIN_EMAIL = os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "Bituop")
+BOOTSTRAP_ADMIN_PASSWORD = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "Bituop123")
+BOOTSTRAP_MOD_EMAIL = os.environ.get("BOOTSTRAP_MOD_EMAIL", "Bituop")
+BOOTSTRAP_MOD_PASSWORD = os.environ.get("BOOTSTRAP_MOD_PASSWORD", "Bituop123")
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").lower()
 
 # ---- Fail-fast production guardrails ----
@@ -410,22 +410,36 @@ async def seed_catalog():
     except Exception as e:
         log.warning(f"member-panel indexes warning: {e}")
 
-    # Bootstrap admin login credentials — creates a password-based admin
-    # user on first boot if one doesn't already exist for the configured
-    # BOOTSTRAP_ADMIN_EMAIL. Use env vars to override the defaults.
+    # Bootstrap admin login credentials — creates or **updates** the
+    # password-based staff account on every boot so changing the
+    # BOOTSTRAP_* env vars is a one-restart credential rotation.
+    # If the same identifier is used for both admin and moderator, a single
+    # combined super-staff account is provisioned (is_admin AND is_moderator).
     async def _seed_staff(email: str, password: str, role: str):
-        """role is 'admin' or 'moderator'. Sets the matching flag."""
+        """role is 'admin' or 'moderator'. Idempotent: password is re-synced
+        every boot; existing accounts get the role flag toggled on."""
         try:
-            existing = await db.users.find_one({"admin_email": email.lower()})
-            if existing:
-                return
+            email_l = email.lower().strip()
             pw_hash = bcrypt.hashpw(password.encode("utf-8"),
                                      bcrypt.gensalt(rounds=10)).decode("utf-8")
+            existing = await db.users.find_one({"admin_email": email_l})
+            role_flag = "is_admin" if role == "admin" else "is_moderator"
+            if existing:
+                await db.users.update_one(
+                    {"id": existing["id"]},
+                    {"$set": {
+                        "admin_password_hash": pw_hash,
+                        role_flag: True,
+                        "is_banned": False,
+                    }},
+                )
+                log.info(f"Re-synced bootstrap {role}: {email_l}")
+                return
             doc = {
                 "id": str(uuid.uuid4()),
                 "steam_id": f"{role}-" + str(uuid.uuid4())[:12],
-                "display_name": role.capitalize(),
-                "admin_email": email.lower(),
+                "display_name": email.strip() or role.capitalize(),
+                "admin_email": email_l,
                 "admin_password_hash": pw_hash,
                 "auth_method": "admin_password",
                 "is_admin": role == "admin",
@@ -435,7 +449,7 @@ async def seed_catalog():
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             await db.users.insert_one(doc)
-            log.info(f"Seeded bootstrap {role}: {email}")
+            log.info(f"Seeded bootstrap {role}: {email_l}")
         except Exception as e:
             log.warning(f"{role} bootstrap warning: {e}")
 
