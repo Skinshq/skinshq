@@ -240,6 +240,28 @@ function UsersTab() {
     } catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
   };
 
+  const setStatus = async (status) => {
+    if (!selected) return;
+    let reason = null;
+    if (status === "restricted") reason = window.prompt("Restriction reason (optional):") || "";
+    try {
+      await api.patch(`/admin/users/${selected.id}/status`, { status, reason });
+      toast.success(`Account status → ${status}`);
+      load();
+      openDetail(selected);
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+  };
+
+  const setPremium = async (tier) => {
+    if (!selected) return;
+    try {
+      await api.patch(`/admin/users/${selected.id}/premium`, { tier });
+      toast.success(tier === 0 ? "Premium removed" : `Premium tier → ${tier}`);
+      load();
+      openDetail(selected);
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+  };
+
   return (
     <div>
       <div className="flex flex-wrap gap-2 mb-4">
@@ -375,30 +397,83 @@ function UsersTab() {
           )}
 
           <DialogFooter>
-            <button onClick={toggleModerator} data-testid="user-toggle-moderator"
-              className={`flex items-center gap-1 px-4 py-2 rounded-sm text-xs uppercase tracking-widest font-bold ${
-                detail?.user.is_moderator
-                  ? "bg-[#3B82F6]/15 hover:bg-[#3B82F6]/25 text-[#60A5FA] border border-[#3B82F6]/30"
-                  : "bg-white/5 hover:bg-white/10 text-[#E0E0E0] border border-white/10"
-              }`}>
-              <ShieldCheck className="w-3 h-3" /> {detail?.user.is_moderator ? "Remove moderator" : "Make moderator"}
-            </button>
-            {detail?.user.is_banned ? (
-              <button onClick={doUnban} data-testid="user-unban"
-                className="flex items-center gap-1 bg-[#2ECC71] hover:bg-[#40D57F] text-[#0A0A0A] font-bold px-4 py-2 rounded-sm text-xs uppercase tracking-widest">
-                <ShieldCheck className="w-3 h-3" /> Unban
-              </button>
-            ) : (
-              <div className="flex items-center gap-2 w-full">
-                <input value={banReason} onChange={(e) => setBanReason(e.target.value)}
-                  placeholder="Ban reason (optional)"
-                  className="bg-[#121212] border border-white/10 rounded-sm px-3 py-2 text-sm flex-1 outline-none focus:border-[#EB4B4B]" />
-                <button onClick={doBan} data-testid="user-ban"
-                  className="flex items-center gap-1 bg-[#EB4B4B] hover:bg-[#F56060] text-white font-bold px-4 py-2 rounded-sm text-xs uppercase tracking-widest">
-                  <Ban className="w-3 h-3" /> Ban user
-                </button>
+            <div className="w-full space-y-3">
+              {/* Account status + Premium tier controls */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="text-[9px] uppercase tracking-widest text-[#555] font-mono mb-1.5">Account status</div>
+                  <div className="flex gap-1">
+                    {[
+                      { k: "good", label: "Good", cls: "bg-[#2ECC71]/15 text-[#2ECC71] border-[#2ECC71]/30" },
+                      { k: "restricted", label: "Restrict", cls: "bg-[#F0AD4E]/15 text-[#F0AD4E] border-[#F0AD4E]/30" },
+                      { k: "banned", label: "Ban", cls: "bg-[#EB4B4B]/15 text-[#EB4B4B] border-[#EB4B4B]/30" },
+                    ].map(({ k, label, cls }) => {
+                      const active = (detail?.user.account_status || "good") === k;
+                      return (
+                        <button
+                          key={k}
+                          onClick={() => setStatus(k)}
+                          data-testid={`user-status-${k}`}
+                          className={`flex-1 px-2 py-1.5 rounded-sm text-[10px] uppercase tracking-widest font-bold border ${
+                            active ? cls : "bg-white/5 text-[#8A8A8A] border-white/10 hover:text-white"
+                          }`}
+                        >{label}</button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[9px] uppercase tracking-widest text-[#555] font-mono mb-1.5">Premium tier</div>
+                  <div className="flex gap-1">
+                    {[
+                      { t: 0, label: "None" },
+                      { t: 1, label: "Trader" },
+                      { t: 2, label: "Dealer" },
+                      { t: 3, label: "Broker" },
+                    ].map(({ t, label }) => {
+                      const active = (detail?.user.premium_tier || 0) === t;
+                      return (
+                        <button
+                          key={t}
+                          onClick={() => setPremium(t)}
+                          data-testid={`user-premium-${t}`}
+                          className={`flex-1 px-2 py-1.5 rounded-sm text-[10px] uppercase tracking-widest font-bold border ${
+                            active ? "bg-[#A855F7]/15 text-[#C084FC] border-[#A855F7]/30" : "bg-white/5 text-[#8A8A8A] border-white/10 hover:text-white"
+                          }`}
+                        >{label}</button>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
-            )}
+
+              <div className="flex flex-wrap gap-2">
+                <button onClick={toggleModerator} data-testid="user-toggle-moderator"
+                  className={`flex items-center gap-1 px-4 py-2 rounded-sm text-xs uppercase tracking-widest font-bold ${
+                    detail?.user.is_moderator
+                      ? "bg-[#3B82F6]/15 hover:bg-[#3B82F6]/25 text-[#60A5FA] border border-[#3B82F6]/30"
+                      : "bg-white/5 hover:bg-white/10 text-[#E0E0E0] border border-white/10"
+                  }`}>
+                  <ShieldCheck className="w-3 h-3" /> {detail?.user.is_moderator ? "Remove moderator" : "Make moderator"}
+                </button>
+                {detail?.user.is_banned ? (
+                  <button onClick={doUnban} data-testid="user-unban"
+                    className="flex items-center gap-1 bg-[#2ECC71] hover:bg-[#40D57F] text-[#0A0A0A] font-bold px-4 py-2 rounded-sm text-xs uppercase tracking-widest">
+                    <ShieldCheck className="w-3 h-3" /> Unban
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-2 flex-1 min-w-[300px]">
+                    <input value={banReason} onChange={(e) => setBanReason(e.target.value)}
+                      placeholder="Ban reason (optional)"
+                      className="bg-[#121212] border border-white/10 rounded-sm px-3 py-2 text-sm flex-1 outline-none focus:border-[#EB4B4B]" />
+                    <button onClick={doBan} data-testid="user-ban"
+                      className="flex items-center gap-1 bg-[#EB4B4B] hover:bg-[#F56060] text-white font-bold px-4 py-2 rounded-sm text-xs uppercase tracking-widest">
+                      <Ban className="w-3 h-3" /> Ban user
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -156,6 +156,11 @@ export default function ItemDetailPopup({ item, onClose, onBuy }) {
   const [orderPrice, setOrderPrice] = useState("");
   const [placingOrder, setPlacingOrder] = useState(false);
 
+  const [showOfferForm, setShowOfferForm] = useState(false);
+  const [offerPrice, setOfferPrice] = useState("");
+  const [offerMessage, setOfferMessage] = useState("");
+  const [sendingOffer, setSendingOffer] = useState(false);
+
   const rarity = item.rarity || "consumer";
   const cleanBase = stripName(item.market_hash_name || item.skin_name || item.name || "");
   const isStat = /StatTrak/i.test(item.market_hash_name || "");
@@ -221,6 +226,26 @@ export default function ItemDetailPopup({ item, onClose, onBuy }) {
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Could not create buy order");
     } finally { setPlacingOrder(false); }
+  };
+
+  const sendOffer = async () => {
+    if (!user) { toast.error("Sign in first"); loginWithSteam(); return; }
+    const price = parseFloat(offerPrice);
+    if (!price || price <= 0) { toast.error("Enter a valid offer amount"); return; }
+    if (!item.id) { toast.error("This item is not currently listed for offers"); return; }
+    setSendingOffer(true);
+    try {
+      await api.post("/offers", {
+        listing_id: item.id,
+        price_usd: price,
+        message: offerMessage.trim() || null,
+      });
+      toast.success("Offer sent — the seller will get a notification");
+      setShowOfferForm(false);
+      setOfferPrice(""); setOfferMessage("");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Could not send offer");
+    } finally { setSendingOffer(false); }
   };
 
   const master = detail?.master || {};
@@ -305,6 +330,47 @@ export default function ItemDetailPopup({ item, onClose, onBuy }) {
                   >
                     Buy Now
                   </button>
+                )}
+                {item.id && (
+                  <button
+                    onClick={() => setShowOfferForm((s) => !s)}
+                    data-testid="popup-make-offer"
+                    className="mt-2 w-full text-xs font-bold uppercase tracking-widest bg-white/5 hover:bg-white/10 text-[#E0E0E0] px-3 py-2.5 rounded-lg border border-white/10"
+                  >
+                    Make Offer / Bargain
+                  </button>
+                )}
+                {showOfferForm && (
+                  <div className="mt-3 p-3 rounded-lg bg-black/40 border border-[#E4AE39]/30 space-y-2">
+                    <div className="text-[10px] uppercase tracking-widest text-[#8A8A8A] font-mono">
+                      Send your best offer to the seller
+                    </div>
+                    <input
+                      type="number" step="0.01" min="0.01"
+                      value={offerPrice}
+                      onChange={(e) => setOfferPrice(e.target.value)}
+                      placeholder="Offer amount (USD)"
+                      data-testid="popup-offer-price"
+                      className="w-full bg-[#0A0A0A] border border-white/10 focus:border-[#E4AE39] outline-none rounded-lg px-3 py-2 text-sm font-mono text-[#E0E0E0]"
+                    />
+                    <textarea
+                      value={offerMessage}
+                      onChange={(e) => setOfferMessage(e.target.value)}
+                      placeholder="Optional message to the seller (200 chars max)"
+                      maxLength={200}
+                      data-testid="popup-offer-message"
+                      className="w-full bg-[#0A0A0A] border border-white/10 focus:border-[#E4AE39] outline-none rounded-lg px-3 py-2 text-[11px] resize-none"
+                      rows={2}
+                    />
+                    <button
+                      onClick={sendOffer}
+                      disabled={sendingOffer}
+                      data-testid="popup-offer-submit"
+                      className="w-full text-[10px] uppercase tracking-widest font-bold bg-[#2ECC71] hover:bg-[#3EDD82] disabled:opacity-50 text-black px-3 py-2 rounded-lg"
+                    >
+                      {sendingOffer ? "Sending…" : "Send Offer"}
+                    </button>
+                  </div>
                 )}
               </div>
             )}

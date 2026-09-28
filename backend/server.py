@@ -191,6 +191,7 @@ class ProfileUpdate(BaseModel):
     socials: Optional[dict] = None   # {twitter, discord, instagram, youtube, twitch}
     profile_public: Optional[bool] = None
     profile_visibility: Optional[str] = None   # 'public' | 'anonymous' | 'hidden'
+    inventory_public: Optional[bool] = None    # if False, Steam inventory hidden on seller page
 
 
 class NotificationPrefs(BaseModel):
@@ -207,6 +208,23 @@ class NotificationPrefs(BaseModel):
 class WalletTxn(BaseModel):
     amount_usd: float
     note: Optional[str] = None
+    payment_method: Optional[str] = None   # 'bank' | 'credit_card' | 'crypto' | 'wallet'
+
+
+class PriceAlertCreate(BaseModel):
+    skin_name: str
+    master_id: Optional[str] = None
+    max_price_usd: float
+    wear: Optional[str] = None
+
+
+class AdminUserStatus(BaseModel):
+    status: str  # 'good' | 'restricted' | 'banned'
+    reason: Optional[str] = None
+
+
+class AdminUserPremium(BaseModel):
+    tier: int  # 0 (none) | 1 (Trader) | 2 (Dealer) | 3 (Broker)
 
 
 class BuyOrderCreate(BaseModel):
@@ -1014,6 +1032,8 @@ async def create_listing(payload: ListingCreate, user=Depends(require_verified))
         raise HTTPException(400, "asset_id is required")
     if not payload.price_usd or payload.price_usd <= 0:
         raise HTTPException(400, "price_usd must be > 0")
+    if (user.get("account_status") or "good") == "restricted":
+        raise HTTPException(403, "Your account is restricted — listing is disabled. Contact support.")
 
     # Only Steam-OpenID accounts can list — SteamID64-manual login is read-only
     if user.get("auth_method") != "steam_openid":
@@ -2059,8 +2079,21 @@ _SOCIAL_KEYS = {"twitter", "discord", "instagram", "youtube", "twitch"}
 async def me_profile(user=Depends(get_current_user)):
     stats = await _user_stats(user["id"])
     badges = _compute_badges(user, stats)
+    # Compute verified criteria (auto-verified when all pass; admin can still force-set is_verified)
+    completed_trades = int(stats.get("completed_trades") or stats.get("total_trades") or 0)
+    verified_criteria = {
+        "steam_linked": bool(user.get("steam_id")) and (user.get("auth_method") == "steam_openid"),
+        "email_verified": bool(user.get("email_verified") or user.get("email")),
+        "trade_url_set": bool(user.get("trade_url")),
+        "min_completed_trades": completed_trades >= 5,
+        "not_banned": not user.get("is_banned", False),
+    }
+    verified_progress = sum(1 for v in verified_criteria.values() if v)
+    verified_total = len(verified_criteria)
     # Ensure fields exist with defaults for the UI
     prefs = {**DEFAULT_NOTIFICATION_PREFS, **(user.get("notification_prefs") or {})}
+    premium_tier = int(user.get("premium_tier") or (1 if user.get("is_premium") else 0))
+    PREMIUM_LABELS = {0: None, 1: "Trader", 2: "Dealer", 3: "Broker"}
     profile = {
         "id": user["id"],
         "steam_id": user.get("steam_id"),
@@ -2070,6 +2103,9 @@ async def me_profile(user=Depends(get_current_user)):
         "email": user.get("email"),
         "is_verified": user.get("is_verified", False),
         "is_premium": user.get("is_premium", False),
+        "premium_tier": premium_tier,
+        "premium_label": PREMIUM_LABELS.get(premium_tier),
+        "account_status": user.get("account_status") or ("banned" if user.get("is_banned") else "good"),
         "is_admin": user.get("is_admin", False),
         "created_at": user.get("created_at"),
         "trade_url": user.get("trade_url"),
@@ -2077,6 +2113,10 @@ async def me_profile(user=Depends(get_current_user)):
         "socials": user.get("socials") or {},
         "profile_public": user.get("profile_public", True),
         "profile_visibility": user.get("profile_visibility", "public" if user.get("profile_public", True) else "anonymous"),
+        "inventory_public": user.get("inventory_public", True),
+        "verified_criteria": verified_criteria,
+        "verified_progress": verified_progress,
+        "verified_total": verified_total,
         "notification_prefs": prefs,
         "wallet_balance_usd": round(float(user.get("wallet_balance_usd", 0.0)), 2),
     }
@@ -2118,6 +2158,8 @@ async def update_profile(payload: ProfileUpdate, user=Depends(get_current_user))
         upd["profile_visibility"] = vis
         # Sync legacy boolean so old UI screens keep working
         upd["profile_public"] = (vis == "public")
+    if payload.inventory_public is not None:
+        upd["inventory_public"] = bool(payload.inventory_public)
     if not upd:
         return {"ok": True, "updated": 0}
     await db.users.update_one({"id": user["id"]}, {"$set": upd})
@@ -2143,9 +2185,11 @@ async def update_notification_prefs(payload: NotificationPrefs, user=Depends(get
 # --- Wallet & Ledger (MOCKED top-ups/withdrawals) ---
 
 async def _record_wallet_txn(user_id: str, kind: str, amount_usd: float,
-                              note: str = "", ref_id: Optional[str] = None) -> dict:
+                              note: str = "", ref_id: Optional[str] = None,
+                              payment_method: Optional[str] = None) -> dict:
     """Append a ledger entry AND update the user's cached balance atomically.
-    'kind' is one of: deposit, withdraw, purchase, sale, refund."""
+    'kind' is one of: deposit, withdraw, purchase, sale, refund, fee.
+    payment_method: 'bank' | 'credit_card' | 'crypto' | 'wallet' | None (internal)."""
     doc = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
@@ -2153,6 +2197,7 @@ async def _record_wallet_txn(user_id: str, kind: str, amount_usd: float,
         "amount_usd": round(float(amount_usd), 2),  # positive=in, negative=out
         "note": note or "",
         "ref_id": ref_id,
+        "payment_method": payment_method,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.wallet_txns.insert_one(doc)
@@ -2163,11 +2208,58 @@ async def _record_wallet_txn(user_id: str, kind: str, amount_usd: float,
 
 
 @api.get("/me/wallet")
-async def me_wallet(limit: int = 50, user=Depends(get_current_user)):
+async def me_wallet(limit: int = 200, kind: Optional[str] = None,
+                     user=Depends(get_current_user)):
+    """Wallet snapshot with three-way breakdown:
+      - available_usd: cached balance (usable now)
+      - on_hold_usd: money locked in in-flight orders as buyer
+      - payout_usd: sale proceeds waiting for 7-day CS2 trade-lock to clear
+      - total_fees_paid_usd: cumulative platform fees paid (1% per sale)
+    kind: optional filter — 'deposit' | 'withdraw' | 'purchase' | 'sale' | 'fee'.
+    """
     balance = round(float(user.get("wallet_balance_usd", 0.0)), 2)
-    txns = await db.wallet_txns.find({"user_id": user["id"]}, {"_id": 0}) \
+
+    # Money on hold = sum of active buyer orders NOT yet COMPLETED
+    HOLD_STATES = ["PAYMENT_CONFIRMED", "AWAITING_SELLER_TRADE",
+                    "TRADE_OFFER_REPORTED", "AWAITING_BUYER_ACCEPTANCE",
+                    "TRADE_VERIFICATION", "VERIFICATION_PENDING", "MANUAL_REVIEW"]
+    hold_docs = await db.orders.find({
+        "buyer_id": user["id"],
+        "state": {"$in": HOLD_STATES},
+    }, {"amount_usd": 1, "_id": 0}).to_list(200)
+    on_hold = round(sum(float(d.get("amount_usd") or 0) for d in hold_docs), 2)
+
+    # Payout balance = sale proceeds still within 7-day trade lock window
+    from datetime import timedelta
+    week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    payout_docs = await db.orders.find({
+        "seller_id": user["id"],
+        "state": "COMPLETED",
+        "completed_at": {"$gt": week_ago},
+    }, {"amount_usd": 1, "_id": 0}).to_list(500)
+    payout = round(sum(float(d.get("amount_usd") or 0) * 0.99 for d in payout_docs), 2)
+
+    total_fees = await db.wallet_txns.aggregate([
+        {"$match": {"user_id": user["id"], "kind": "fee"}},
+        {"$group": {"_id": None, "total": {"$sum": "$amount_usd"}}},
+    ]).to_list(1)
+    total_fees_paid = round(abs(float(total_fees[0]["total"])), 2) if total_fees else 0.0
+
+    q = {"user_id": user["id"]}
+    if kind:
+        q["kind"] = kind
+    txns = await db.wallet_txns.find(q, {"_id": 0}) \
         .sort([("created_at", -1)]).limit(limit).to_list(limit)
-    return {"balance_usd": balance, "transactions": txns}
+
+    return {
+        "balance_usd": balance,
+        "available_usd": round(max(0.0, balance - on_hold), 2),
+        "on_hold_usd": on_hold,
+        "payout_usd": payout,
+        "total_fees_paid_usd": total_fees_paid,
+        "platform_fee_rate": 0.01,
+        "transactions": txns,
+    }
 
 
 @api.post("/me/wallet/deposit")
@@ -2178,8 +2270,12 @@ async def wallet_deposit(payload: WalletTxn, user=Depends(get_current_user)):
         raise HTTPException(400, "Amount must be positive")
     if payload.amount_usd > 10000:
         raise HTTPException(400, "Deposit cap is $10,000 in demo mode")
+    method = (payload.payment_method or "bank").lower()
+    if method not in ("bank", "credit_card", "crypto", "wallet"):
+        raise HTTPException(400, "payment_method must be bank/credit_card/crypto/wallet")
     txn = await _record_wallet_txn(user["id"], "deposit", payload.amount_usd,
-                                     note=payload.note or "Demo deposit")
+                                     note=payload.note or f"Deposit via {method}",
+                                     payment_method=method)
     return {"ok": True, "transaction": txn,
             "new_balance": round(user.get("wallet_balance_usd", 0.0) + payload.amount_usd, 2)}
 
@@ -2191,10 +2287,110 @@ async def wallet_withdraw(payload: WalletTxn, user=Depends(get_current_user)):
     curr = float(user.get("wallet_balance_usd", 0.0))
     if payload.amount_usd > curr:
         raise HTTPException(400, f"Insufficient balance (${curr:.2f})")
+    method = (payload.payment_method or "bank").lower()
+    if method not in ("bank", "credit_card", "crypto", "wallet"):
+        raise HTTPException(400, "payment_method must be bank/credit_card/crypto/wallet")
     txn = await _record_wallet_txn(user["id"], "withdraw", -payload.amount_usd,
-                                     note=payload.note or "Demo withdrawal")
+                                     note=payload.note or f"Withdrawal to {method}",
+                                     payment_method=method)
     return {"ok": True, "transaction": txn,
             "new_balance": round(curr - payload.amount_usd, 2)}
+
+
+# --- Price Alerts (notify-only, no wallet freeze — like buy_orders but zero-cost) ---
+
+@api.post("/me/price-alerts")
+async def create_price_alert(payload: PriceAlertCreate, user=Depends(get_current_user)):
+    if payload.max_price_usd <= 0:
+        raise HTTPException(400, "max_price_usd must be positive")
+    if payload.master_id:
+        m = await db.skins_master.find_one({"master_id": payload.master_id},
+                                             {"_id": 0, "image": 1, "rarity": 1, "name": 1})
+    else:
+        m = await db.skins_master.find_one({"name": payload.skin_name},
+                                             {"_id": 0, "image": 1, "rarity": 1, "master_id": 1})
+    if not m:
+        raise HTTPException(404, "Skin not found")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user["id"],
+        "skin_name": payload.skin_name,
+        "master_id": payload.master_id or m.get("master_id"),
+        "max_price_usd": round(float(payload.max_price_usd), 2),
+        "wear": payload.wear,
+        "image": m.get("image"),
+        "rarity": m.get("rarity"),
+        "status": "active",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.price_alerts.insert_one(doc.copy())
+    doc.pop("_id", None)
+    return doc
+
+
+@api.get("/me/price-alerts")
+async def list_price_alerts(user=Depends(get_current_user)):
+    items = await db.price_alerts.find({"user_id": user["id"]}, {"_id": 0}) \
+        .sort([("created_at", -1)]).to_list(200)
+    for a in items:
+        a["matching_listings"] = await db.listings.count_documents({
+            "skin_name": a["skin_name"],
+            "status": "active",
+            "price_usd": {"$lte": a["max_price_usd"]},
+            **({"wear": a["wear"]} if a.get("wear") else {}),
+        })
+    return {"items": items, "count": len(items)}
+
+
+@api.delete("/me/price-alerts/{alert_id}")
+async def delete_price_alert(alert_id: str, user=Depends(get_current_user)):
+    res = await db.price_alerts.delete_one({"id": alert_id, "user_id": user["id"]})
+    if not res.deleted_count:
+        raise HTTPException(404, "Price alert not found")
+    return {"ok": True}
+
+
+# --- Admin: user account status + premium tier ---
+
+@api.patch("/admin/users/{user_id}/status")
+async def admin_set_user_status(user_id: str, payload: AdminUserStatus,
+                                  user=Depends(get_current_user)):
+    if not user.get("is_admin"):
+        raise HTTPException(403, "Admin only")
+    s = (payload.status or "").lower().strip()
+    if s not in ("good", "restricted", "banned"):
+        raise HTTPException(400, "status must be good/restricted/banned")
+    upd = {"account_status": s}
+    if s == "banned":
+        upd["is_banned"] = True
+        upd["ban_reason"] = payload.reason or ""
+    elif s == "good":
+        upd["is_banned"] = False
+        upd["ban_reason"] = None
+    else:  # restricted
+        upd["is_banned"] = False
+        upd["restriction_reason"] = payload.reason or ""
+    res = await db.users.update_one({"id": user_id}, {"$set": upd})
+    if not res.matched_count:
+        raise HTTPException(404, "User not found")
+    return {"ok": True, **upd}
+
+
+@api.patch("/admin/users/{user_id}/premium")
+async def admin_set_user_premium(user_id: str, payload: AdminUserPremium,
+                                   user=Depends(get_current_user)):
+    if not user.get("is_admin"):
+        raise HTTPException(403, "Admin only")
+    if payload.tier not in (0, 1, 2, 3):
+        raise HTTPException(400, "tier must be 0..3")
+    upd = {
+        "premium_tier": payload.tier,
+        "is_premium": payload.tier > 0,
+    }
+    res = await db.users.update_one({"id": user_id}, {"$set": upd})
+    if not res.matched_count:
+        raise HTTPException(404, "User not found")
+    return {"ok": True, **upd}
 
 
 # --- Transactions (my trades) ---

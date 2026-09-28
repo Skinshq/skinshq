@@ -4,6 +4,7 @@ import {
   User, Wallet, Receipt, Repeat2, Handshake, BellRing, Award, Crown, Star, Shield,
   CheckCircle2, Clock, Flame, Gem, Store, Twitter, Instagram, Youtube, Twitch,
   MessageCircle, ExternalLink, Loader2, Plus, Trash2, ArrowDownCircle, ArrowUpCircle,
+  Bell, Package, Landmark, CreditCard, Bitcoin, Filter, Lock, ShieldAlert, ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "../lib/api";
@@ -107,15 +108,23 @@ function ProfileTab({ profile, stats, badges, onSaved }) {
           ) : <div className="w-24 h-24 bg-white/5 rounded-sm mx-auto mb-3" />}
           <div className="font-display font-black text-xl">{profile.display_name}</div>
           <div className="text-[10px] font-mono text-[#8A8A8A] mt-1">{profile.steam_id}</div>
-          <div className="flex items-center justify-center gap-2 mt-3">
+          <div className="flex items-center justify-center gap-2 mt-3 flex-wrap">
             {profile.is_verified && (
               <span className="text-[9px] font-mono bg-[#2ECC71]/15 text-[#2ECC71] border border-[#2ECC71]/30 px-2 py-0.5 rounded-sm uppercase tracking-widest">Verified</span>
             )}
-            {profile.is_premium && (
-              <span className="text-[9px] font-mono bg-[#A855F7]/15 text-[#C084FC] border border-[#A855F7]/30 px-2 py-0.5 rounded-sm uppercase tracking-widest">Premium</span>
+            {profile.premium_label && (
+              <span className="text-[9px] font-mono bg-[#A855F7]/15 text-[#C084FC] border border-[#A855F7]/30 px-2 py-0.5 rounded-sm uppercase tracking-widest">
+                Premium: {profile.premium_label}
+              </span>
             )}
             {profile.is_admin && (
               <span className="text-[9px] font-mono bg-[#E4AE39]/15 text-[#E4AE39] border border-[#E4AE39]/30 px-2 py-0.5 rounded-sm uppercase tracking-widest">Admin</span>
+            )}
+            {profile.account_status === "restricted" && (
+              <span className="text-[9px] font-mono bg-[#F0AD4E]/15 text-[#F0AD4E] border border-[#F0AD4E]/30 px-2 py-0.5 rounded-sm uppercase tracking-widest">Restricted</span>
+            )}
+            {profile.account_status === "banned" && (
+              <span className="text-[9px] font-mono bg-[#EB4B4B]/15 text-[#EB4B4B] border border-[#EB4B4B]/30 px-2 py-0.5 rounded-sm uppercase tracking-widest">Banned</span>
             )}
           </div>
           {profile.profile_url && (
@@ -158,6 +167,40 @@ function ProfileTab({ profile, stats, badges, onSaved }) {
               })}
             </div>
           )}
+        </div>
+
+        {/* How to get Verified */}
+        <div className="bg-[#121212] border border-white/10 rounded-sm p-5" data-testid="verified-card">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-[10px] uppercase tracking-widest text-[#555] font-mono">How to get verified</div>
+            <div className="text-[10px] font-mono text-[#E4AE39]">
+              {profile.verified_progress || 0} / {profile.verified_total || 5}
+            </div>
+          </div>
+          {profile.is_verified && (
+            <div className="text-[11px] text-[#2ECC71] font-mono mb-3">
+              ✓ Your account is verified. Keep it clean to keep the badge.
+            </div>
+          )}
+          <ul className="space-y-2 text-[12px]">
+            {[
+              ["steam_linked", "Linked via Steam OpenID"],
+              ["email_verified", "Email attached & verified"],
+              ["trade_url_set", "Steam Trade URL saved"],
+              ["min_completed_trades", "Completed at least 5 trades"],
+              ["not_banned", "Account is in good standing"],
+            ].map(([k, label]) => {
+              const done = !!profile.verified_criteria?.[k];
+              return (
+                <li key={k} className="flex items-center gap-2">
+                  {done
+                    ? <CheckCircle2 className="w-3.5 h-3.5 text-[#2ECC71]" />
+                    : <Clock className="w-3.5 h-3.5 text-[#8A8A8A]" />}
+                  <span className={done ? "text-[#E0E0E0]" : "text-[#8A8A8A]"}>{label}</span>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       </div>
 
@@ -266,18 +309,18 @@ function StatBox({ label, value }) {
 // =============== WALLET TAB ===============
 function WalletTab() {
   const { format } = useCurrency();
-  const [balance, setBalance] = useState(0);
-  const [txns, setTxns] = useState([]);
+  const [wallet, setWallet] = useState({ balance_usd: 0, available_usd: 0, on_hold_usd: 0, payout_usd: 0, total_fees_paid_usd: 0, platform_fee_rate: 0.01, transactions: [] });
   const [loading, setLoading] = useState(true);
   const [action, setAction] = useState(null); // "deposit" | "withdraw"
   const [amount, setAmount] = useState("");
+  const [method, setMethod] = useState("bank");
   const [submitting, setSubmitting] = useState(false);
+  const [filter, setFilter] = useState("all"); // all | deposit | withdraw | charges
 
   const load = () => {
     setLoading(true);
-    api.get("/me/wallet").then(({ data }) => {
-      setBalance(data.balance_usd); setTxns(data.transactions || []);
-    }).finally(() => setLoading(false));
+    api.get("/me/wallet").then(({ data }) => setWallet(data))
+      .finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []);
 
@@ -287,84 +330,189 @@ function WalletTab() {
     setSubmitting(true);
     try {
       const path = action === "deposit" ? "/me/wallet/deposit" : "/me/wallet/withdraw";
-      await api.post(path, { amount_usd: amt });
+      await api.post(path, { amount_usd: amt, payment_method: method });
       toast.success(action === "deposit" ? "Wallet credited" : "Withdrawal recorded");
-      setAction(null); setAmount(""); load();
+      setAction(null); setAmount(""); setMethod("bank"); load();
     } catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
     finally { setSubmitting(false); }
   };
 
+  const filtered = wallet.transactions.filter((t) => {
+    if (filter === "all") return true;
+    if (filter === "charges") return ["fee", "purchase"].includes(t.kind);
+    return t.kind === filter;
+  });
+
+  const METHOD_ICON = { bank: Landmark, credit_card: CreditCard, crypto: Bitcoin, wallet: Wallet };
+  const METHOD_LABEL = { bank: "Bank", credit_card: "Credit Card", crypto: "Crypto", wallet: "Wallet" };
+
+  const StatCard = ({ label, value, hint, color, icon: Icon, testid }) => (
+    <div className={`p-4 rounded-xl border ${color}`} data-testid={testid}>
+      <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-mono opacity-70 mb-1">
+        <Icon className="w-3.5 h-3.5" /> {label}
+      </div>
+      <div className="font-mono text-2xl font-black">{format(value)}</div>
+      {hint && <div className="text-[10px] text-current opacity-60 mt-1">{hint}</div>}
+    </div>
+  );
+
   return (
-    <div className="space-y-6">
-      <div className="bg-[#121212] border border-[#E4AE39]/30 rounded-sm p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-[10px] uppercase tracking-widest text-[#E4AE39] font-mono mb-1">Wallet balance</div>
-            <div className="font-mono text-4xl font-black text-[#E4AE39]" data-testid="wallet-balance">{format(balance)}</div>
-          </div>
-          <div className="flex gap-2">
-            <button onClick={() => setAction("deposit")} data-testid="btn-deposit"
-              className="flex items-center gap-1 bg-[#2ECC71] hover:bg-[#40D57F] text-[#0A0A0A] font-bold px-4 py-2 rounded-sm text-xs uppercase tracking-widest">
-              <ArrowDownCircle className="w-3.5 h-3.5" /> Deposit
-            </button>
-            <button onClick={() => setAction("withdraw")} data-testid="btn-withdraw"
-              className="flex items-center gap-1 bg-[#EB4B4B] hover:bg-[#F56060] text-white font-bold px-4 py-2 rounded-sm text-xs uppercase tracking-widest">
-              <ArrowUpCircle className="w-3.5 h-3.5" /> Withdraw
-            </button>
-          </div>
-        </div>
-        <div className="mt-3 text-[10px] font-mono text-[#EB4B4B]/80 bg-[#EB4B4B]/5 border border-[#EB4B4B]/20 rounded-sm px-3 py-2">
-          MOCKED: real top-ups will go through Stripe once wallet payments are wired up. Any amount can be added instantly for demo purposes.
+    <div className="space-y-6" data-testid="wallet-tab">
+      {/* Breakdown cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatCard
+          label="Available"
+          value={wallet.available_usd}
+          hint="Ready to spend / withdraw"
+          color="bg-[#E4AE39]/10 border-[#E4AE39]/40 text-[#E4AE39]"
+          icon={Wallet}
+          testid="wallet-card-available"
+        />
+        <StatCard
+          label="On hold"
+          value={wallet.on_hold_usd}
+          hint="Frozen in active buy orders"
+          color="bg-[#EB4B4B]/10 border-[#EB4B4B]/40 text-[#EB4B4B]"
+          icon={Lock}
+          testid="wallet-card-onhold"
+        />
+        <StatCard
+          label="Payout balance"
+          value={wallet.payout_usd}
+          hint="7-day CS2 trade-lock window"
+          color="bg-[#4B69FF]/10 border-[#4B69FF]/40 text-[#8BA0FF]"
+          icon={Clock}
+          testid="wallet-card-payout"
+        />
+        <StatCard
+          label="Marketplace fees"
+          value={wallet.total_fees_paid_usd}
+          hint={`${(wallet.platform_fee_rate * 100).toFixed(1)}% per sale`}
+          color="bg-white/5 border-white/10 text-[#8A8A8A]"
+          icon={Filter}
+          testid="wallet-card-fees"
+        />
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={() => { setAction("deposit"); setMethod("bank"); }} data-testid="btn-deposit"
+          className="flex items-center gap-1.5 bg-[#2ECC71] hover:bg-[#40D57F] text-[#0A0A0A] font-bold px-4 py-2 rounded-lg text-xs uppercase tracking-widest">
+          <ArrowDownCircle className="w-3.5 h-3.5" /> Deposit
+        </button>
+        <button onClick={() => { setAction("withdraw"); setMethod("bank"); }} data-testid="btn-withdraw"
+          className="flex items-center gap-1.5 bg-[#EB4B4B] hover:bg-[#F56060] text-white font-bold px-4 py-2 rounded-lg text-xs uppercase tracking-widest">
+          <ArrowUpCircle className="w-3.5 h-3.5" /> Withdraw
+        </button>
+        <div className="ml-auto text-[10px] font-mono text-[#8A8A8A]">
+          MOCKED — real deposits will run through Stripe once wallet payments ship.
         </div>
       </div>
 
-      <div className="bg-[#121212] border border-white/10 rounded-sm overflow-hidden">
+      {/* Filter tabs */}
+      <div className="flex items-center gap-1 flex-wrap bg-[#121212] border border-white/10 rounded-lg p-1 w-fit">
+        {[
+          ["all", "All"],
+          ["deposit", "Deposits"],
+          ["withdraw", "Withdrawals"],
+          ["charges", "Charges & fees"],
+        ].map(([k, label]) => (
+          <button
+            key={k}
+            onClick={() => setFilter(k)}
+            data-testid={`wallet-filter-${k}`}
+            className={`px-3 py-1.5 rounded-md text-[10px] uppercase tracking-widest font-mono transition-colors ${
+              filter === k ? "bg-[#E4AE39] text-black" : "text-[#8A8A8A] hover:text-white"
+            }`}
+          >{label}</button>
+        ))}
+      </div>
+
+      {/* Ledger with rich columns */}
+      <div className="bg-[#121212] border border-white/10 rounded-xl overflow-hidden">
         <div className="px-5 py-3 border-b border-white/10 flex items-center gap-2">
           <Receipt className="w-4 h-4 text-[#E4AE39]" />
           <h3 className="font-display font-black tracking-tight">Ledger history</h3>
         </div>
-        <table className="w-full text-sm">
-          <thead className="text-[10px] uppercase tracking-widest text-[#555] border-b border-white/10">
-            <tr>
-              <th className="text-left py-3 px-4">Kind</th>
-              <th className="text-left py-3 px-4">Note</th>
-              <th className="text-right py-3 px-4">Amount</th>
-              <th className="text-right py-3 px-4">When</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><td colSpan={4} className="text-center py-10 text-[#8A8A8A]">Loading…</td></tr>
-            ) : txns.length === 0 ? (
-              <tr><td colSpan={4} className="text-center py-10 text-[#8A8A8A]">No wallet activity yet.</td></tr>
-            ) : txns.map((t) => (
-              <tr key={t.id} className="border-b border-white/5 hover:bg-white/[0.02]">
-                <td className="py-3 px-4 text-[10px] uppercase tracking-widest font-mono text-[#8A8A8A]">{t.kind}</td>
-                <td className="py-3 px-4 text-[#E0E0E0]">{t.note || "—"}</td>
-                <td className={`py-3 px-4 text-right font-mono font-bold ${t.amount_usd >= 0 ? "text-[#2ECC71]" : "text-[#EB4B4B]"}`}>
-                  {t.amount_usd >= 0 ? "+" : ""}{format(t.amount_usd)}
-                </td>
-                <td className="py-3 px-4 text-right text-[10px] text-[#555] font-mono">{timeAgo(t.created_at)}</td>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-[10px] uppercase tracking-widest text-[#555] border-b border-white/10">
+              <tr>
+                <th className="text-left py-3 px-4">Date</th>
+                <th className="text-left py-3 px-4">Time</th>
+                <th className="text-left py-3 px-4">Kind</th>
+                <th className="text-left py-3 px-4">Method</th>
+                <th className="text-left py-3 px-4">Note</th>
+                <th className="text-right py-3 px-4">Amount</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={6} className="text-center py-10 text-[#8A8A8A]">Loading…</td></tr>
+              ) : filtered.length === 0 ? (
+                <tr><td colSpan={6} className="text-center py-10 text-[#8A8A8A]">No activity for this filter.</td></tr>
+              ) : filtered.map((t) => {
+                const d = new Date(t.created_at);
+                const Icon = METHOD_ICON[t.payment_method] || Wallet;
+                return (
+                  <tr key={t.id} className="border-b border-white/5 hover:bg-white/[0.02]">
+                    <td className="py-3 px-4 text-[10px] font-mono text-[#8A8A8A]">{d.toLocaleDateString()}</td>
+                    <td className="py-3 px-4 text-[10px] font-mono text-[#8A8A8A]">{d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</td>
+                    <td className="py-3 px-4 text-[10px] uppercase tracking-widest font-mono text-[#E0E0E0]">{t.kind}</td>
+                    <td className="py-3 px-4 text-[10px] font-mono text-[#8A8A8A]">
+                      <span className="inline-flex items-center gap-1"><Icon className="w-3 h-3" /> {METHOD_LABEL[t.payment_method] || "—"}</span>
+                    </td>
+                    <td className="py-3 px-4 text-[#E0E0E0] truncate max-w-xs">{t.note || "—"}</td>
+                    <td className={`py-3 px-4 text-right font-mono font-bold ${t.amount_usd >= 0 ? "text-[#2ECC71]" : "text-[#EB4B4B]"}`}>
+                      {t.amount_usd >= 0 ? "+" : ""}{format(t.amount_usd)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <Dialog open={!!action} onOpenChange={(o) => { if (!o) { setAction(null); setAmount(""); } }}>
-        <DialogContent className="bg-[#0A0A0A] border border-white/10 max-w-sm rounded-sm">
+        <DialogContent className="bg-[#0A0A0A] border border-white/10 max-w-sm rounded-xl">
           <DialogHeader>
             <DialogTitle className="capitalize">{action} USD</DialogTitle>
           </DialogHeader>
-          <input
-            type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)}
-            data-testid="wallet-amount"
-            placeholder="0.00"
-            className="w-full bg-[#121212] border border-white/10 focus:border-[#E4AE39] rounded-sm px-3 py-2.5 text-lg font-mono font-bold outline-none"
-          />
+          <div className="space-y-3">
+            <input
+              type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)}
+              data-testid="wallet-amount"
+              placeholder="0.00"
+              className="w-full bg-[#121212] border border-white/10 focus:border-[#E4AE39] rounded-lg px-3 py-2.5 text-lg font-mono font-bold outline-none"
+            />
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-[#555] font-mono mb-1.5">Payment method</div>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { k: "bank", label: "Bank transfer", Icon: Landmark },
+                  { k: "credit_card", label: "Credit card", Icon: CreditCard },
+                  { k: "crypto", label: "Crypto", Icon: Bitcoin },
+                  { k: "wallet", label: "External wallet", Icon: Wallet },
+                ].map(({ k, label, Icon }) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setMethod(k)}
+                    data-testid={`wallet-method-${k}`}
+                    className={`flex items-center gap-2 p-2 rounded-lg border text-[11px] font-medium transition-colors ${
+                      method === k ? "bg-[#E4AE39]/15 border-[#E4AE39]/50 text-[#E4AE39]" : "bg-[#121212] border-white/10 text-[#8A8A8A] hover:text-white"
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" /> {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
           <DialogFooter>
             <button onClick={submit} disabled={submitting} data-testid="wallet-submit"
-              className={`w-full flex items-center justify-center gap-2 text-xs uppercase tracking-widest font-bold px-4 py-2.5 rounded-sm disabled:opacity-50 ${action === "deposit" ? "bg-[#2ECC71] text-[#0A0A0A]" : "bg-[#EB4B4B] text-white"}`}>
+              className={`w-full flex items-center justify-center gap-2 text-xs uppercase tracking-widest font-bold px-4 py-2.5 rounded-lg disabled:opacity-50 ${action === "deposit" ? "bg-[#2ECC71] text-[#0A0A0A]" : "bg-[#EB4B4B] text-white"}`}>
               {submitting ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Working…</> : `Confirm ${action}`}
             </button>
           </DialogFooter>
@@ -374,7 +522,21 @@ function WalletTab() {
   );
 }
 
-// =============== TRANSACTIONS TAB ===============
+// =============== TRANSACTIONS (TRADES) TAB ===============
+const ORDER_STATE_TONE = {
+  COMPLETED: "text-[#2ECC71] border-[#2ECC71]/30 bg-[#2ECC71]/5",
+  AWAITING_SELLER_TRADE: "text-[#E4AE39] border-[#E4AE39]/30 bg-[#E4AE39]/5",
+  TRADE_OFFER_REPORTED: "text-[#E4AE39] border-[#E4AE39]/30 bg-[#E4AE39]/5",
+  AWAITING_BUYER_ACCEPTANCE: "text-[#E4AE39] border-[#E4AE39]/30 bg-[#E4AE39]/5",
+  TRADE_VERIFICATION: "text-[#4B69FF] border-[#4B69FF]/30 bg-[#4B69FF]/5",
+  VERIFICATION_PENDING: "text-[#4B69FF] border-[#4B69FF]/30 bg-[#4B69FF]/5",
+  MANUAL_REVIEW: "text-[#F0AD4E] border-[#F0AD4E]/30 bg-[#F0AD4E]/5",
+  CANCELLED: "text-[#8A8A8A] border-white/10 bg-white/5",
+  SELLER_TIMEOUT: "text-[#EB4B4B] border-[#EB4B4B]/30 bg-[#EB4B4B]/5",
+  DISPUTED: "text-[#EB4B4B] border-[#EB4B4B]/30 bg-[#EB4B4B]/5",
+  REFUND_PENDING: "text-[#F0AD4E] border-[#F0AD4E]/30 bg-[#F0AD4E]/5",
+};
+
 function TransactionsTab() {
   const { format } = useCurrency();
   const [orders, setOrders] = useState({ bought: [], sold: [] });
@@ -385,43 +547,336 @@ function TransactionsTab() {
       .finally(() => setLoading(false));
   }, []);
 
-  const Section = ({ title, list, side }) => (
-    <div className="bg-[#121212] border border-white/10 rounded-sm overflow-hidden">
+  const Row = ({ o, side }) => {
+    const snap = o.listing_snapshot || {};
+    const rarity = snap.rarity || "consumer";
+    const state = o.state || o.status || "—";
+    const tone = ORDER_STATE_TONE[state] || "text-[#8A8A8A] border-white/10 bg-white/5";
+    const counterparty = side === "bought" ? (o.seller_name || "—") : (o.buyer_name || "—");
+    return (
+      <Link
+        to={`/order/${o.id}`}
+        className={`flex items-center gap-3 p-3 rounded-lg bg-[#0A0A0A] border border-white/5 hover:border-[#E4AE39]/40 transition-colors rarity-border-${rarity}`}
+        data-testid={`trade-row-${o.id}`}
+      >
+        <div className={`w-14 h-14 rounded-lg overflow-hidden flex-shrink-0 rarity-bg-${rarity} border border-white/5`}>
+          {snap.image ? (
+            <img src={snap.image} alt="" className="w-full h-full object-contain p-1" />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-[#333] text-[10px]">NO IMG</div>
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className={`text-sm font-medium truncate rarity-text-${rarity}`}>{snap.skin_name || "—"}</div>
+          <div className="text-[10px] text-[#8A8A8A] font-mono uppercase tracking-widest truncate">
+            {side === "bought" ? "From" : "To"} {counterparty} · {snap.wear || "—"}
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="font-mono font-bold text-[#E4AE39]">{format(o.amount_usd || 0)}</div>
+          <div className={`inline-block text-[9px] uppercase tracking-widest font-mono px-2 py-0.5 rounded-md border mt-1 ${tone}`}>
+            {state.replace(/_/g, " ")}
+          </div>
+        </div>
+        <ExternalLink className="w-3.5 h-3.5 text-[#8A8A8A] flex-shrink-0" />
+      </Link>
+    );
+  };
+
+  const Section = ({ title, list, side, emptyLabel }) => (
+    <div className="bg-[#121212] border border-white/10 rounded-xl overflow-hidden">
       <div className="px-5 py-3 border-b border-white/10 flex items-center justify-between">
-        <div className="text-[10px] uppercase tracking-widest text-[#555] font-mono">{title}</div>
-        <span className="text-xs font-mono text-[#8A8A8A]">{list.length}</span>
+        <div className="text-[10px] uppercase tracking-widest text-[#8A8A8A] font-mono">{title}</div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-mono text-[#8A8A8A]">{list.length}</span>
+          <Link to="/orders" className="text-[10px] uppercase tracking-widest text-[#E4AE39] hover:underline font-mono">
+            View all →
+          </Link>
+        </div>
       </div>
-      {list.length === 0 ? (
-        <div className="text-xs text-[#8A8A8A] px-5 py-8 text-center">No trades yet.</div>
-      ) : (
-        <table className="w-full text-sm">
-          <tbody>
-            {list.map((o) => (
-              <tr key={o.id} className="border-b border-white/5 hover:bg-white/[0.02]">
-                <td className="py-3 px-4">
-                  <div className="text-[#E0E0E0]">{o.listing_snapshot?.skin_name || "—"}</div>
-                  <div className="text-[10px] text-[#8A8A8A] font-mono">
-                    {side === "bought" ? "from " + (o.seller_name || "—") : "to " + (o.buyer_name || "—")}
-                  </div>
-                </td>
-                <td className="py-3 px-4 text-right font-mono font-bold text-[#E4AE39]">{format(o.amount_usd || 0)}</td>
-                <td className="py-3 px-4 text-right">
-                  <span className={`text-[9px] font-mono uppercase tracking-widest px-2 py-0.5 rounded-sm border ${o.status === "paid" ? "text-[#2ECC71] border-[#2ECC71]/30" : "text-[#E4AE39] border-[#E4AE39]/30"}`}>{o.status}</span>
-                </td>
-                <td className="py-3 px-4 text-right text-[10px] text-[#555] font-mono">{timeAgo(o.created_at)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      <div className="p-3 space-y-2">
+        {list.length === 0 ? (
+          <div className="text-xs text-[#8A8A8A] py-6 text-center">{emptyLabel}</div>
+        ) : list.slice(0, 15).map((o) => <Row key={o.id} o={o} side={side} />)}
+      </div>
     </div>
   );
 
   if (loading) return <div className="text-[#8A8A8A] text-sm py-10">Loading…</div>;
   return (
-    <div className="grid gap-6">
-      <Section title="Purchases" list={orders.bought} side="bought" />
-      <Section title="Sales" list={orders.sold} side="sold" />
+    <div className="grid gap-6" data-testid="trades-tab">
+      <Section title="Purchases" list={orders.bought} side="bought" emptyLabel="You haven't bought anything yet." />
+      <Section title="Sales" list={orders.sold} side="sold" emptyLabel="No sales yet — list a skin from your inventory to get started." />
+    </div>
+  );
+}
+
+// =============== INVENTORY TAB (Steam-pulled + listed filter) ===============
+function InventoryTab({ profile, onSaved }) {
+  const [inv, setInv] = useState([]);
+  const [myListings, setMyListings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState("all"); // all | listed | unlisted
+  const [invPublic, setInvPublic] = useState(profile.inventory_public !== false);
+  const [savingPriv, setSavingPriv] = useState(false);
+
+  useEffect(() => {
+    Promise.all([
+      api.get("/inventory/cs2").catch(() => ({ data: { items: [] } })),
+      api.get("/my/listings").catch(() => ({ data: { items: [] } })),
+    ]).then(([a, b]) => {
+      setInv(a.data.items || []);
+      setMyListings(b.data.items || []);
+    }).finally(() => setLoading(false));
+  }, []);
+
+  const togglePrivacy = async () => {
+    setSavingPriv(true);
+    try {
+      const { data } = await api.patch("/me/profile", { inventory_public: !invPublic });
+      setInvPublic(!invPublic);
+      onSaved?.(data.user);
+      toast.success(`Inventory is now ${!invPublic ? "public" : "private"}`);
+    } catch (e) { toast.error("Failed to update"); }
+    finally { setSavingPriv(false); }
+  };
+
+  const listedAssetIds = new Set(myListings.map((l) => String(l.asset_id)));
+  const filtered = inv.filter((it) => {
+    if (filter === "all") return true;
+    if (filter === "listed") return listedAssetIds.has(String(it.asset_id));
+    return !listedAssetIds.has(String(it.asset_id));
+  });
+
+  return (
+    <div className="space-y-6" data-testid="inventory-tab">
+      {/* Privacy card */}
+      <div className="bg-[#121212] border border-white/10 rounded-xl p-5 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          {invPublic ? (
+            <ShieldCheck className="w-5 h-5 text-[#2ECC71]" />
+          ) : (
+            <ShieldAlert className="w-5 h-5 text-[#EB4B4B]" />
+          )}
+          <div>
+            <div className="text-sm font-medium">
+              Steam inventory is {invPublic ? "public" : "private"}
+            </div>
+            <div className="text-[11px] text-[#8A8A8A] mt-0.5">
+              {invPublic
+                ? "Other traders can peek at your Steam inventory from your seller page."
+                : "Your Steam inventory is hidden from your public seller page. Active listings remain visible (they're intentionally for sale)."}
+            </div>
+          </div>
+        </div>
+        <button
+          onClick={togglePrivacy}
+          disabled={savingPriv}
+          data-testid="inventory-privacy-toggle"
+          className={`relative w-11 h-6 rounded-full transition-colors p-0 ${invPublic ? "bg-[#2ECC71]" : "bg-white/10"}`}
+        >
+          <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${invPublic ? "translate-x-5" : "translate-x-0"}`} />
+        </button>
+      </div>
+
+      {/* Filter tabs */}
+      <div className="flex items-center gap-1 bg-[#121212] border border-white/10 rounded-lg p-1 w-fit">
+        {[
+          ["all", `All (${inv.length})`],
+          ["listed", `Listed (${listedAssetIds.size})`],
+          ["unlisted", `Available (${inv.length - listedAssetIds.size})`],
+        ].map(([k, label]) => (
+          <button
+            key={k}
+            onClick={() => setFilter(k)}
+            data-testid={`inv-filter-${k}`}
+            className={`px-3 py-1.5 rounded-md text-[10px] uppercase tracking-widest font-mono transition-colors ${
+              filter === k ? "bg-[#E4AE39] text-black" : "text-[#8A8A8A] hover:text-white"
+            }`}
+          >{label}</button>
+        ))}
+        <Link to="/inventory" className="ml-2 px-3 py-1.5 rounded-md text-[10px] uppercase tracking-widest font-mono text-[#E4AE39] hover:underline">
+          Open full inventory →
+        </Link>
+      </div>
+
+      {loading ? (
+        <div className="text-[#8A8A8A] text-sm py-10">Loading Steam inventory…</div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-16 border border-dashed border-white/10 rounded-xl text-[#8A8A8A] text-sm">
+          {filter === "listed"
+            ? "You don't have any listings live."
+            : filter === "unlisted"
+            ? "Every tradable item in your inventory is currently listed."
+            : "Your CS2 inventory is empty or private. Enable Steam inventory sharing to pull items."}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          {filtered.slice(0, 30).map((it) => {
+            const listed = listedAssetIds.has(String(it.asset_id));
+            const rarity = it.rarity || "consumer";
+            return (
+              <div key={it.asset_id} className={`p-2 rounded-xl bg-[#121212] border rarity-border-${rarity} ${listed ? "border-[#E4AE39]/40" : "border-white/5"}`}
+                data-testid={`inv-item-${it.asset_id}`}>
+                <div className={`relative aspect-[4/3] rounded-lg overflow-hidden rarity-bg-${rarity}`}>
+                  {it.image && <img src={it.image} alt="" className="absolute inset-0 w-full h-full object-contain p-2" />}
+                  {listed && (
+                    <div className="absolute top-1.5 right-1.5 text-[8px] uppercase tracking-widest font-bold bg-[#E4AE39] text-black px-1.5 py-0.5 rounded">
+                      Listed
+                    </div>
+                  )}
+                </div>
+                <div className={`mt-1.5 text-[11px] font-medium leading-tight line-clamp-2 rarity-text-${rarity}`}>
+                  {it.name || it.market_name || "—"}
+                </div>
+                <div className="text-[9px] font-mono text-[#8A8A8A] uppercase tracking-widest mt-0.5">{it.wear || "—"}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {filtered.length > 30 && (
+        <div className="text-center text-[10px] text-[#555] font-mono">
+          Showing 30 of {filtered.length}. <Link to="/inventory" className="text-[#E4AE39] hover:underline">Open full inventory →</Link>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =============== PRICE ALERTS TAB ===============
+function PriceAlertsTab() {
+  const { format } = useCurrency();
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [skinName, setSkinName] = useState("");
+  const [maxPrice, setMaxPrice] = useState("");
+  const [wear, setWear] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  const load = () => {
+    setLoading(true);
+    api.get("/me/price-alerts")
+      .then(({ data }) => setItems(data.items || []))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, []);
+
+  const create = async () => {
+    const price = parseFloat(maxPrice);
+    if (!skinName.trim() || !price || price <= 0) { toast.error("Enter a skin name and a positive max price"); return; }
+    setCreating(true);
+    try {
+      await api.post("/me/price-alerts", { skin_name: skinName.trim(), max_price_usd: price, wear: wear || null });
+      toast.success("Price alert saved — we'll ping you when a matching listing appears");
+      setShowForm(false); setSkinName(""); setMaxPrice(""); setWear(""); load();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed to save alert"); }
+    finally { setCreating(false); }
+  };
+
+  const remove = async (id) => {
+    if (!window.confirm("Delete this price alert?")) return;
+    try { await api.delete(`/me/price-alerts/${id}`); toast.success("Deleted"); load(); }
+    catch { toast.error("Delete failed"); }
+  };
+
+  return (
+    <div className="space-y-6" data-testid="price-alerts-tab">
+      <div className="bg-[#121212] border border-white/10 rounded-xl p-5 flex items-center justify-between gap-4">
+        <div>
+          <div className="text-sm font-medium">Price alerts</div>
+          <div className="text-[11px] text-[#8A8A8A] mt-0.5">
+            Notify-only — we ping you (in-app + email) when a matching listing hits the marketplace. No wallet balance required, unlike Buy Orders.
+          </div>
+        </div>
+        <button onClick={() => setShowForm(true)} data-testid="new-price-alert"
+          className="flex items-center gap-1.5 bg-[#E4AE39] hover:bg-[#F5C75A] text-black font-bold px-4 py-2 rounded-lg text-xs uppercase tracking-widest">
+          <Plus className="w-3.5 h-3.5" /> New alert
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="text-[#8A8A8A] text-sm py-10 text-center">Loading…</div>
+      ) : items.length === 0 ? (
+        <div className="text-center py-16 border border-dashed border-white/10 rounded-xl text-[#8A8A8A] text-sm">
+          <Bell className="w-8 h-8 mx-auto mb-3 opacity-40" />
+          No active price alerts. Create one above.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {items.map((a) => {
+            const rarity = a.rarity || "consumer";
+            return (
+              <div key={a.id} className={`flex items-center gap-3 p-3 bg-[#121212] border border-white/5 rarity-border-${rarity} rounded-xl`}>
+                <div className={`w-12 h-12 rounded-lg overflow-hidden rarity-bg-${rarity} flex-shrink-0`}>
+                  {a.image && <img src={a.image} alt="" className="w-full h-full object-contain p-1" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className={`text-sm font-medium rarity-text-${rarity}`}>{a.skin_name}</div>
+                  <div className="text-[10px] text-[#8A8A8A] font-mono uppercase tracking-widest">
+                    {a.wear || "Any wear"} · {a.matching_listings} matching now
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="font-mono font-bold text-[#E4AE39]">≤ {format(a.max_price_usd)}</div>
+                  <button onClick={() => remove(a.id)} data-testid={`delete-alert-${a.id}`}
+                    className="text-[10px] uppercase tracking-widest text-[#EB4B4B] hover:text-[#F56060] font-mono">
+                    <Trash2 className="w-3 h-3 inline" /> Delete
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <Dialog open={showForm} onOpenChange={setShowForm}>
+        <DialogContent className="bg-[#0A0A0A] border border-white/10 max-w-sm rounded-xl">
+          <DialogHeader><DialogTitle>New price alert</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-[#555] font-mono mb-1">Skin name</div>
+              <input
+                value={skinName}
+                onChange={(e) => setSkinName(e.target.value)}
+                placeholder="e.g. AK-47 | Redline"
+                data-testid="alert-skin"
+                className="w-full bg-[#121212] border border-white/10 focus:border-[#E4AE39] rounded-lg px-3 py-2 text-sm outline-none"
+              />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-[#555] font-mono mb-1">Max price (USD)</div>
+              <input
+                type="number" step="0.01" min="0"
+                value={maxPrice}
+                onChange={(e) => setMaxPrice(e.target.value)}
+                placeholder="0.00"
+                data-testid="alert-price"
+                className="w-full bg-[#121212] border border-white/10 focus:border-[#E4AE39] rounded-lg px-3 py-2 text-sm font-mono outline-none"
+              />
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-[#555] font-mono mb-1">Wear (optional)</div>
+              <select value={wear} onChange={(e) => setWear(e.target.value)} data-testid="alert-wear"
+                className="w-full bg-[#121212] border border-white/10 rounded-lg px-3 py-2 text-sm outline-none">
+                <option value="">Any wear</option>
+                <option>Factory New</option>
+                <option>Minimal Wear</option>
+                <option>Field-Tested</option>
+                <option>Well-Worn</option>
+                <option>Battle-Scarred</option>
+              </select>
+            </div>
+          </div>
+          <DialogFooter>
+            <button onClick={create} disabled={creating} data-testid="alert-submit"
+              className="w-full flex items-center justify-center gap-2 bg-[#E4AE39] hover:bg-[#F5C75A] text-black font-bold px-4 py-2.5 rounded-lg text-xs uppercase tracking-widest disabled:opacity-50">
+              {creating ? "Saving…" : "Create alert"}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -771,7 +1226,9 @@ export default function MemberPanel() {
             ["profile", "Profile", User],
             ["wallet", "Wallet", Wallet],
             ["trades", "Trades", Receipt],
+            ["inventory", "Inventory", Package],
             ["buyorders", "Buy Orders", Handshake],
+            ["alerts", "Price Alerts", Bell],
             ["offers", "Offers", Repeat2],
             ["notifs", "Notifications", BellRing],
           ].map(([k, label, Icon]) => (
@@ -784,7 +1241,9 @@ export default function MemberPanel() {
         <TabsContent value="profile"><ProfileTab profile={data.profile} stats={data.stats} badges={data.badges} onSaved={() => load()} /></TabsContent>
         <TabsContent value="wallet"><WalletTab /></TabsContent>
         <TabsContent value="trades"><TransactionsTab /></TabsContent>
+        <TabsContent value="inventory"><InventoryTab profile={data.profile} onSaved={(p) => setData({ ...data, profile: p })} /></TabsContent>
         <TabsContent value="buyorders"><BuyOrdersTab balance={data.profile.wallet_balance_usd} /></TabsContent>
+        <TabsContent value="alerts"><PriceAlertsTab /></TabsContent>
         <TabsContent value="offers"><OffersTab /></TabsContent>
         <TabsContent value="notifs"><NotifPrefsTab profile={data.profile} onSaved={(p) => setData({ ...data, profile: p })} /></TabsContent>
       </Tabs>
