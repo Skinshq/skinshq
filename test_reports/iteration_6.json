@@ -1,0 +1,42 @@
+{
+  "summary": "End-to-end regression for the 6-item roadmap ship (F1 Wallet breakdown+deposit, F2 Inventory tab+privacy toggle, F3 Trades tab, F4 Price Alerts CRUD, F5 Make-Offer button, F6 Verified card + badges, F7 Admin status/premium controls, F8 backend contract smoke tests). Backend: 6/6 pytest passing. Frontend: all documented data-testids render and behave as spec'd; wallet deposit persists payment_method=crypto, Available jumps $0 → $50 with a Crypto row in ledger; Price Alert create + delete round-trip works; Admin user detail shows both new 3-way status and 4-way premium groups and existing moderator/ban controls still render; Make Offer redirects logged-out users to Steam OpenID as designed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_roadmap_features.py",
+    "/app/test_reports/pytest/roadmap_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "MemberPanel.jsx is now 1253 lines (WalletTab, TransactionsTab, InventoryTab, PriceAlertsTab, BuyOrdersTab, OffersTab, NotifPrefsTab, ProfileTab all in one file). This exceeds the 700-line split threshold — split each tab into its own file under /pages/member/ for maintainability. High priority.",
+    "server.py is 3471 lines — should be split (auth, wallet, listings, admin, price-alerts routers).",
+    "AdminPage.jsx setStatus uses window.prompt() for the restriction reason. Works, but not stylistically consistent with the rest of the app that uses Dialog/Toast; consider a proper modal.",
+    "Price alert delete uses window.confirm() — same UX inconsistency comment as above.",
+    "In InventoryTab (line 685-687) the filter labels 'Listed (...)' vs 'Available (...)' use the label 'Available' for unlisted items but the underlying test id is `inv-filter-unlisted`. Not a bug, just a mismatch between UI copy and test id that may confuse future test authors.",
+    "GET /me/profile response nests fields under `data.profile` — several tests may naïvely expect them at top-level. Consider documenting or flattening a small subset."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_roadmap_features.py (new pytest file for the 6 backend contract tests)"
+  ],
+  "test_execution": {
+    "F1_wallet": "PASS — 4 breakdown cards (available/onhold/payout/fees) all render. All 4 filter buttons (all/deposit/withdraw/charges) render, deposit filter shows active E4AE39 highlight after click. Deposit modal opens with all 4 method buttons (bank/credit_card/crypto/wallet). Submitting 50 USD via crypto: Available card went $0.00 → $50.00, ledger row shows 'Crypto' method + amount.",
+    "F2_inventory": "PASS — inventory-privacy-toggle + inv-filter-all/listed/unlisted all render. Toggle click flips the switch class (green ↔ white/10) with a working API call. Admin has no Steam inventory so grid tiles are absent (expected).",
+    "F3_trades": "PASS — trades-tab renders Purchases + Sales sections, 2 'View all →' links to /orders. trade-row-* count = 0 (admin has no orders, expected).",
+    "F4_price_alerts": "PASS — new-price-alert button opens dialog with alert-skin/alert-price/alert-wear/alert-submit. Creating AK-47 Redline @ $25 FT adds a delete-alert-{id} row. Delete button (with window.confirm auto-accepted) removes the row (count 1 → 0).",
+    "F5_make_offer": "PASS — On /live, PP-Bizon tile opens the popup; popup-buy and popup-make-offer both visible. Click Make Offer expands the inline form with popup-offer-price, popup-offer-message, popup-offer-submit. Submitting while logged out redirects to steamcommunity.com/openid (sign-in flow) as designed.",
+    "F6_verified_and_badges": "PASS — verified-card renders with 'HOW TO GET VERIFIED', progress '0 / 5', green 'Your account is verified' message (admin auto-verified), and 5 criteria list (Steam / Email / Trade URL / 5 trades / good standing). badge-verified (green) and badge-admin (gold) both render.",
+    "F7_admin_status_premium": "PASS — 3-way user-status-good/restricted/banned and 4-way user-premium-0/1/2/3 all render inside the user detail dialog for a Steam user. Clicking user-status-restricted triggers the reason prompt; PATCH succeeds. Clicking user-premium-2 (Dealer) succeeds. Existing user-toggle-moderator and user-ban controls still render alongside the new buttons.",
+    "F8_backend_contract": "PASS — 6/6 pytest passing: /api/me/wallet has available_usd/on_hold_usd/payout_usd/total_fees_paid_usd/platform_fee_rate=0.01; POST /me/wallet/deposit persists payment_method=crypto in ledger; POST/GET/DELETE /me/price-alerts round-trip; PATCH /admin/users/:id/status status=restricted → 200; PATCH /admin/users/:id/premium tier=2 → 200; /me/profile.profile has verified_progress + verified_criteria + verified_total."
+  },
+  "success_rate": {"backend": "100% (6/6)", "frontend": "100% of F1-F7 flows"},
+  "test_credentials": "Admin Bituop/Bituop123 for /admin login. Regular user via POST /api/auth/steamid {steam_id:'76561198000000000'}.",
+  "seed_data_creation": "Created and cleaned up: 1 TEST wallet deposit (crypto $50), 1 TEST price alert (AK-47 Redline). Admin PATCHed a Steam user to restricted+premium-2 and reset back to good+0.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 6 roadmap items are wired end-to-end. Test creds unchanged. Only one live listing (PP-Bizon Urban Dashed) exists — use it for any popup/offer flow. Admin (Bituop) has no Steam inventory so InventoryTab shows empty state for admin — use a Steam user for inventory tile grid testing.",
+  "rca of the issue": "N/A — no regressions found in this iteration."
+}
